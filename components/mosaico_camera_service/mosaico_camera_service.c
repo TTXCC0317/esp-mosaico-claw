@@ -44,9 +44,9 @@ static void notify_availability(char slot, bool available)
 
 /* Prefer VGA for lower memory usage and keep larger formats as compatibility fallbacks. */
 static const uint32_t s_camera_probe_sizes[][2] = {
-    {1280, 720},
-    {1024, 768},
     {640, 480},
+    {1024, 768},
+    {1280, 720},
 };
 
 static esp_err_t create_supported_camera(mosaico_module_mgr_slot_t slot,
@@ -60,7 +60,7 @@ static esp_err_t create_supported_camera(mosaico_module_mgr_slot_t slot,
         config.slot = slot;
         config.width = s_camera_probe_sizes[i][0];
         config.height = s_camera_probe_sizes[i][1];
-        config.buffer_count = 1;
+        config.buffer_count = 2;
 
         mosaico_camera_handle_t camera = NULL;
         esp_err_t ret = mosaico_camera_new(&config, &camera);

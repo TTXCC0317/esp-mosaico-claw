@@ -648,6 +648,8 @@ static void camera_capture_task(void *ctx)
     uint32_t skip_frames = 0;
     bool waiting_logged = false;
     bool detection_error_logged = false;
+    bool preview_frame_logged = false;
+    uint32_t invalid_frame_count = 0;
     camera_vision_mode_t previous_mode = CAMERA_VISION_MODE_OFF;
     camera_vision_result_t recognition = {0};
     int64_t last_detection_us = 0;
@@ -722,13 +724,20 @@ static void camera_capture_task(void *ctx)
             }
             last_camera = camera;
             skip_frames = MOSAIC_CAMERA_SKIP_FRAMES;
+            preview_frame_logged = false;
+            invalid_frame_count = 0;
         }
 
         if (skip_frames > 0) {
             mosaico_camera_frame_t frame = {0};
             err = mosaico_camera_get_frame(camera, &frame);
             if (err != ESP_OK) {
-                if (err == ESP_ERR_TIMEOUT && !camera_is_stopping()) {
+                if (err == ESP_ERR_INVALID_SIZE) {
+                    invalid_frame_count++;
+                    if (invalid_frame_count == 1U || (invalid_frame_count % 300U) == 0U) {
+                        ESP_LOGW(TAG, "Dropped incomplete camera frame: consecutive=%" PRIu32, invalid_frame_count);
+                    }
+                } else if (err == ESP_ERR_TIMEOUT && !camera_is_stopping()) {
                     if (!camera_restart_after_timeout(camera, &skip_frames)) {
                         camera_stop_registered_stream();
                         last_camera = NULL;
@@ -740,6 +749,10 @@ static void camera_capture_task(void *ctx)
                     last_camera = NULL;
                 }
                 continue;
+            }
+            if (invalid_frame_count > 0U) {
+                ESP_LOGI(TAG, "Camera frame stream recovered after %" PRIu32 " incomplete frame(s)", invalid_frame_count);
+                invalid_frame_count = 0;
             }
             const esp_err_t release_err =
                 mosaico_camera_return_frame(camera, &frame);
@@ -790,7 +803,12 @@ static void camera_capture_task(void *ctx)
                 camera_restore_after_flash(camera, &flash_state);
             }
             frame_finish_write((size_t)slot, false);
-            if (err == ESP_ERR_TIMEOUT && !camera_is_stopping()) {
+            if (err == ESP_ERR_INVALID_SIZE) {
+                invalid_frame_count++;
+                if (invalid_frame_count == 1U || (invalid_frame_count % 300U) == 0U) {
+                    ESP_LOGW(TAG, "Dropped incomplete camera frame: consecutive=%" PRIu32, invalid_frame_count);
+                }
+            } else if (err == ESP_ERR_TIMEOUT && !camera_is_stopping()) {
                 if (!camera_restart_after_timeout(camera, &skip_frames)) {
                     camera_stop_registered_stream();
                     last_camera = NULL;
@@ -802,6 +820,10 @@ static void camera_capture_task(void *ctx)
                 last_camera = NULL;
             }
             continue;
+        }
+        if (invalid_frame_count > 0U) {
+            ESP_LOGI(TAG, "Camera frame stream recovered after %" PRIu32 " incomplete frame(s)", invalid_frame_count);
+            invalid_frame_count = 0;
         }
 
         err = camera_convert_frame(
@@ -857,6 +879,10 @@ static void camera_capture_task(void *ctx)
             ESP_LOGE(TAG, "camera frame conversion failed: %s",
                      esp_err_to_name(err));
             break;
+        }
+        if (!preview_frame_logged) {
+            ESP_LOGI(TAG, "First camera preview frame rendered");
+            preview_frame_logged = true;
         }
         mosaic_camera_tick(ui);
         vTaskDelay(pdMS_TO_TICKS(MOSAIC_CAMERA_FRAME_DELAY_MS));
