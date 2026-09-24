@@ -42,11 +42,16 @@ static void notify_availability(char slot, bool available)
     }
 }
 
-/* Prefer VGA for lower memory usage and keep larger formats as compatibility fallbacks. */
-static const uint32_t s_camera_probe_sizes[][2] = {
-    {1280, 720},
-    {1024, 768},
-    {640, 480},
+typedef struct {
+    uint32_t width;
+    uint32_t height;
+    uint8_t buffer_count;
+} camera_profile_t;
+
+/* Keep high-resolution defaults lean; VGA retries with two buffers for stable capture. */
+static const camera_profile_t s_camera_profiles[] = {
+    {0, 0, 1},
+    {640, 480, 2},
 };
 
 static esp_err_t create_supported_camera(mosaico_module_mgr_slot_t slot,
@@ -55,41 +60,46 @@ static esp_err_t create_supported_camera(mosaico_module_mgr_slot_t slot,
     esp_err_t last_err = ESP_ERR_NOT_SUPPORTED;
 
     *out_camera = NULL;
-    for (size_t i = 0; i < sizeof(s_camera_probe_sizes) / sizeof(s_camera_probe_sizes[0]); ++i) {
+    for (size_t i = 0; i < sizeof(s_camera_profiles) / sizeof(s_camera_profiles[0]); ++i) {
+        const camera_profile_t *profile = &s_camera_profiles[i];
         mosaico_camera_config_t config = MOSAICO_CAMERA_DEFAULT_CONFIG();
         config.slot = slot;
-        config.width = s_camera_probe_sizes[i][0];
-        config.height = s_camera_probe_sizes[i][1];
-        config.buffer_count = 1;
+        config.width = profile->width;
+        config.height = profile->height;
+        config.buffer_count = profile->buffer_count;
 
         mosaico_camera_handle_t camera = NULL;
+        mosaico_camera_info_t camera_info = {0};
         esp_err_t ret = mosaico_camera_new(&config, &camera);
         if (ret == ESP_OK) {
             ret = mosaico_camera_open(camera);
-            if (ret == ESP_OK) {
-                const esp_err_t close_ret = mosaico_camera_close(camera);
-                if (close_ret != ESP_OK) {
-                    ESP_LOGW(TAG, "Camera format %ux%u probe close failed: %s",
-                             (unsigned)config.width, (unsigned)config.height,
-                             esp_err_to_name(close_ret));
-                }
-                ESP_LOGI(TAG, "Camera format %ux%u accepted",
-                         (unsigned)config.width, (unsigned)config.height);
-                *out_camera = camera;
-                return ESP_OK;
+        }
+        if (ret == ESP_OK) {
+            ret = mosaico_camera_get_info(camera, &camera_info);
+            const esp_err_t close_ret = mosaico_camera_close(camera);
+            if (ret == ESP_OK && close_ret != ESP_OK) {
+                ret = close_ret;
             }
         }
 
-        last_err = ret;
-        ESP_LOGW(TAG, "Camera format %ux%u rejected: %s",
-                 (unsigned)config.width, (unsigned)config.height,
-                 esp_err_to_name(ret));
+        const bool retry_vga = ret == ESP_OK && profile->width == 0 && camera_info.width == 640 && camera_info.height == 480;
+        if (ret == ESP_OK && !retry_vga) {
+            ESP_LOGI(TAG, "Camera profile accepted: %ux%u buffers=%u", (unsigned)camera_info.width,
+                     (unsigned)camera_info.height, (unsigned)camera_info.buffer_count);
+            *out_camera = camera;
+            return ESP_OK;
+        }
+        if (retry_vga) {
+            ESP_LOGI(TAG, "VGA camera detected; retrying with double buffering");
+        } else {
+            last_err = ret;
+            ESP_LOGW(TAG, "Camera profile rejected: %s", esp_err_to_name(ret));
+        }
         if (camera != NULL) {
             const esp_err_t del_ret = mosaico_camera_del(camera);
             if (del_ret != ESP_OK) {
                 *out_camera = camera;
-                ESP_LOGE(TAG, "Delete rejected camera failed: %s",
-                         esp_err_to_name(del_ret));
+                ESP_LOGE(TAG, "Delete rejected camera failed: %s", esp_err_to_name(del_ret));
                 return del_ret;
             }
         }
