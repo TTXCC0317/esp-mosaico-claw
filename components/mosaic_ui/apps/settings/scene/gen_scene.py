@@ -449,7 +449,9 @@ def _build_wlan(objs, page):
     objs[-3]["events"] = wlan_back_events
     objs[-2].pop("events", None)
     objs[-1].pop("events", None)
-    objs.append(label(page, 12, 72, 240, 48, "WLAN", size=36))
+    objs.append(label(page, 12, 70, 240, 42, "WLAN", size=36))
+    _bound_label(objs, page, 12, 108, 334, 24, "Mode: Off",
+                 "settings_wlan_mode_info", size=18, color=MUTED)
     _toggle(objs, page, 358, 73, "settings_wlan_enabled",
             checked=True, events=[{
                 "event": "click",

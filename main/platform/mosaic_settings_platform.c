@@ -129,6 +129,8 @@ static void wifi_state_event_cb(
         .rssi = event->sta_connected ? event->rssi : 0,
     };
     strlcpy(network.ssid, event->sta_ssid, sizeof(network.ssid));
+    strlcpy(network.ap_ssid, event->ap_ssid, sizeof(network.ap_ssid));
+    strlcpy(network.mode, event->mode, sizeof(network.mode));
     strlcpy(network.ip,
             event->sta_connected ? event->sta_ip : "", sizeof(network.ip));
     if (event->ap_active && event->ap_ip[0] != '\0') {
@@ -191,6 +193,12 @@ static esp_err_t get_snapshot(
         strlcpy(ret_snapshot->network.ssid,
                 wifi.sta_ssid != NULL ? wifi.sta_ssid : snapshot->network.ssid,
                 sizeof(ret_snapshot->network.ssid));
+        strlcpy(ret_snapshot->network.ap_ssid,
+                wifi.ap_ssid != NULL ? wifi.ap_ssid : "",
+                sizeof(ret_snapshot->network.ap_ssid));
+        strlcpy(ret_snapshot->network.mode,
+                wifi.mode != NULL ? wifi.mode : "off",
+                sizeof(ret_snapshot->network.mode));
         strlcpy(ret_snapshot->network.ip,
                 wifi.sta_connected && wifi.sta_ip != NULL
                     ? wifi.sta_ip : snapshot->network.ip,
@@ -443,6 +451,12 @@ static esp_err_t get_wifi_status(
         strlcpy(network->ssid,
                 wifi.sta_ssid != NULL ? wifi.sta_ssid : "",
                 sizeof(network->ssid));
+        strlcpy(network->ap_ssid,
+                wifi.ap_ssid != NULL ? wifi.ap_ssid : "",
+                sizeof(network->ap_ssid));
+        strlcpy(network->mode,
+                wifi.mode != NULL ? wifi.mode : "off",
+                sizeof(network->mode));
         strlcpy(network->ip,
                 wifi.sta_connected && wifi.sta_ip != NULL ? wifi.sta_ip : "",
                 sizeof(network->ip));
