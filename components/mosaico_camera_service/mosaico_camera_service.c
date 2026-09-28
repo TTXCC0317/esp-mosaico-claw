@@ -317,8 +317,14 @@ esp_err_t mosaico_camera_service_get_default(mosaico_camera_handle_t *out_camera
 
 bool mosaico_camera_service_is_available(void)
 {
-    mosaico_camera_handle_t camera = NULL;
-    return mosaico_camera_service_get_default(&camera) == ESP_OK;
+    if (!s_service.lock) {
+        return false;
+    }
+
+    xSemaphoreTake(s_service.lock, portMAX_DELAY);
+    const bool available = s_service.initialized && s_service.camera;
+    xSemaphoreGive(s_service.lock);
+    return available;
 }
 
 void mosaico_camera_service_set_callback(mosaico_camera_availability_callback_t callback, void *user_ctx)
