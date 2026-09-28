@@ -21,6 +21,7 @@ import { SavePanel } from '../components/ui/SavePanel';
 import { Button } from '../components/ui/Button';
 import { Banner } from '../components/ui/Banner';
 import { LabelLink } from '../components/ui/LabelLink';
+import { RestartConfirmModal } from '../components/system/RestartConfirmModal';
 import { IM_CREDENTIAL_URLS } from '../constants/externalLinks';
 import { pushToast } from '../state/toast';
 
@@ -338,7 +339,7 @@ const WechatQrPanel: Component<{ onComplete: (data: WechatLoginStatus) => void }
 
 /* ── Main page ──────────────────────────────────────────────────────── */
 
-export const ImPage: Component = () => {
+export const ImPage: Component<{ onRestartRequest: () => void }> = (props) => {
   const tab = createConfigTab<ImForm>({
     tab: 'im',
     groups: ['im'],
@@ -368,6 +369,7 @@ export const ImPage: Component = () => {
     }),
   });
   const [validationError, setValidationError] = createSignal<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = createSignal(false);
 
   createEffect(() => {
     void tab.form.wechat_token;
@@ -488,6 +490,7 @@ export const ImPage: Component = () => {
     }
 
     await tab.save();
+    setConfirmOpen(true);
   };
 
   return (
@@ -624,6 +627,15 @@ export const ImPage: Component = () => {
         onSave={() => handleSave().catch(() => undefined)}
         onDiscard={tab.discard}
         note={t('restartHint') as string}
+      />
+      <RestartConfirmModal
+        open={confirmOpen()}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          props.onRestartRequest();
+        }}
+        subtitle={t('restartHint') as string}
       />
     </TabShell>
   );

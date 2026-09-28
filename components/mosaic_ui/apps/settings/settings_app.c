@@ -1405,6 +1405,7 @@ static esp_gsp_err_t settings_wlan_set_loading(
 static esp_err_t settings_wlan_render(esp_gsp_handle_t ui)
 {
     const settings_wlan_state_t *wlan = &s_state.wlan;
+    const mosaic_settings_network_t *network = &s_state.snapshot.network;
     const bool page_enabled = s_state.wlan_page_active && wlan->enabled;
     const bool show_current = settings_wlan_show_current();
     const char *status = "Not Connected";
@@ -1436,9 +1437,25 @@ static esp_err_t settings_wlan_render(esp_gsp_handle_t ui)
         break;
     }
     esp_err_t result = ESP_OK;
+    const char *mode = "Off";
+    if (strcmp(network->mode, "provision") == 0) {
+        mode = "AP";
+    } else if (strcmp(network->mode, "apsta") == 0) {
+        mode = "AP+STA";
+    } else if (strcmp(network->mode, "sta_only") == 0) {
+        mode = "STA";
+    }
+    char mode_info[64];
+    if (network->ap_active && network->ap_ssid[0] != '\0') {
+        (void)snprintf(mode_info, sizeof(mode_info), "Mode: %s · AP: %s", mode, network->ap_ssid);
+    } else {
+        (void)snprintf(mode_info, sizeof(mode_info), "Mode: %s", mode);
+    }
 
     keep_first_error(&result,
         gsp_settings_settings_wlan_enabled_set_checked(ui, wlan->enabled));
+    keep_first_error(&result,
+        gsp_settings_settings_wlan_mode_info_set_text(ui, mode_info));
     keep_first_error(&result,
         gsp_settings_settings_wlan_off_layer_set_visible(
             ui, false));
@@ -1525,8 +1542,11 @@ static void settings_wlan_refresh_status(esp_gsp_handle_t ui)
         !stale_connect_snapshot &&
         (s_state.snapshot.network.desired_enabled != network.desired_enabled ||
          s_state.snapshot.network.connected != network.connected ||
+         s_state.snapshot.network.ap_active != network.ap_active ||
          s_state.snapshot.network.state != network.state ||
-         strcmp(s_state.snapshot.network.ssid, network.ssid) != 0);
+         strcmp(s_state.snapshot.network.ssid, network.ssid) != 0 ||
+         strcmp(s_state.snapshot.network.ap_ssid, network.ap_ssid) != 0 ||
+         strcmp(s_state.snapshot.network.mode, network.mode) != 0);
     s_state.snapshot.network = network;
     s_state.wlan.enabled = network.desired_enabled;
     if (!stale_connect_snapshot) {

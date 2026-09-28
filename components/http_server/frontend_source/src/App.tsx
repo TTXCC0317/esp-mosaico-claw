@@ -252,7 +252,9 @@ const App: Component = () => {
                 <AsrPage />
               </Show>
               <Show when={currentTab() === 'im'}>
-                <ImPage />
+                <ImPage
+                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
+                />
               </Show>
               <Show when={currentTab() === 'webreq'}>
                 <WebReqPage

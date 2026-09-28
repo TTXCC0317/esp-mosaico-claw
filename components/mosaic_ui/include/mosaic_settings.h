@@ -83,6 +83,8 @@ typedef struct {
     bool configured;
     bool ap_active;
     char ssid[MOSAIC_SETTINGS_SSID_LEN];
+    char ap_ssid[MOSAIC_SETTINGS_SSID_LEN];
+    char mode[16];
     char ip[MOSAIC_SETTINGS_IP_LEN];
     char portal_url[MOSAIC_SETTINGS_PORTAL_URL_LEN];
     mosaic_settings_wifi_state_t state;

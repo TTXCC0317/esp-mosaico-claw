@@ -1,4 +1,4 @@
-import { createSignal, createUniqueId, Show, splitProps, type Component, type JSX } from 'solid-js';
+import { createEffect, createSignal, createUniqueId, Show, splitProps, type Component, type JSX } from 'solid-js';
 import { t } from '../../i18n';
 
 type CommonFieldProps = {
@@ -147,6 +147,7 @@ type SelectInputProps = Omit<JSX.SelectHTMLAttributes<HTMLSelectElement>, 'class
   };
 
 export const SelectInput: Component<SelectInputProps> = (props) => {
+  let selectRef!: HTMLSelectElement;
   const [local, rest] = splitProps(props, [
     'label',
     'hint',
@@ -155,7 +156,11 @@ export const SelectInput: Component<SelectInputProps> = (props) => {
     'fieldClass',
     'inputClass',
     'children',
+    'value',
   ]);
+  createEffect(() => {
+    if (local.value != null) selectRef.value = String(local.value);
+  });
   return (
     <Field
       label={local.label}
@@ -166,6 +171,7 @@ export const SelectInput: Component<SelectInputProps> = (props) => {
     >
       {({ id }) => (
         <select
+          ref={selectRef}
           id={id}
           {...rest}
           class={[
