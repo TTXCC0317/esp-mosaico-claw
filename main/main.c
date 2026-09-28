@@ -360,7 +360,8 @@ static bool main_wifi_config_changed(
 }
 #endif
 
-static esp_err_t main_save_config(const app_config_t *config)
+static esp_err_t main_save_config_internal(
+    const app_config_t *config, bool apply_wifi)
 {
     esp_err_t err;
     app_claw_config_t *claw_config = NULL;
@@ -411,7 +412,7 @@ static esp_err_t main_save_config(const app_config_t *config)
             return err;
         }
     }
-    if (wifi_changed && s_network_provisioning != NULL) {
+    if (apply_wifi && wifi_changed && s_network_provisioning != NULL) {
         err = network_provisioning_service_reload_and_apply(
                   s_network_provisioning);
         if (err != ESP_OK) {
@@ -422,6 +423,16 @@ static esp_err_t main_save_config(const app_config_t *config)
     }
 #endif
     return ESP_OK;
+}
+
+static esp_err_t main_save_config(const app_config_t *config)
+{
+    return main_save_config_internal(config, true);
+}
+
+static esp_err_t main_save_web_config(const app_config_t *config)
+{
+    return main_save_config_internal(config, false);
 }
 
 static void main_copy_claw_to_app_config(const app_claw_config_t *src, app_config_t *dst)
@@ -983,7 +994,7 @@ void app_main(void)
         .storage_base_path = app_fs_storage_base_path(),
         .services = {
             .load_config = main_load_config,
-            .save_config = main_save_config,
+            .save_config = main_save_web_config,
             .get_wifi_status = main_get_wifi_status,
             .restart_device = main_restart_device,
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
