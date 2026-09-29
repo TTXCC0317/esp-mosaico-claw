@@ -17,7 +17,6 @@ import {
   cancelWechatLogin,
   diffConfigPatch,
   pollWechatLoginStatus,
-  saveConfigPatch,
   startWechatLogin,
 } from '../api/client';
 import { LanguageSwitcher } from '../components/layout/LanguageSwitcher';
@@ -31,7 +30,7 @@ import {
 } from '../constants/externalLinks';
 import { SearchFields, type SearchConfig } from '../components/system/SearchFields';
 import { t } from '../i18n';
-import { appConfig, ensureConfigGroups, patchConfigLocal } from '../state/config';
+import { appConfig, ensureConfigGroups, saveConfig, configGeneration } from '../state/config';
 import { pushToast } from '../state/toast';
 
 type TabId =
@@ -596,11 +595,9 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
       const absM = Math.abs(offsetMin) % 60;
       const sign = offsetMin >= 0 ? '' : '-';
       const tz = `UTC${sign}${absH}${absM ? ':' + String(absM).padStart(2, '0') : ''}`;
-      saveConfigPatch({ time_timezone: tz })
-        .then(() => patchConfigLocal({ time_timezone: tz }))
-        .catch(() => {
-          console.error('Failed to save time_timezone to config');
-        });
+      saveConfig({ time_timezone: tz }).catch(() => {
+        console.error('Failed to save time_timezone to config');
+      });
     }
 
     try {
@@ -675,6 +672,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
     baseline: Partial<AppConfig>,
     onSaved: () => void,
   ) => {
+    const version = configGeneration();
     const patch = diffConfigPatch(full, baseline);
     if (Object.keys(patch).length === 0) {
       onSaved();
@@ -684,8 +682,8 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
     setSaving(true);
     setError(null);
     try {
-      await saveConfigPatch(patch);
-      patchConfigLocal(patch);
+      await saveConfig(patch);
+      if (version !== configGeneration()) return;
       onSaved();
       pushToast(t('setupSavedStep') as string, 'success');
       next();
@@ -810,7 +808,8 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
         ? (validatePlatform(t('imTelegramTitle') as string, [
             [imForm.tg_bot_token, t('tgBotToken') as string],
           ]) ??
-          (imForm.tg_bot_token.trim() !== imBaseline.tg_bot_token && !isTelegramToken(imForm.tg_bot_token.trim())
+          (imForm.tg_bot_token.trim() !== imBaseline.tg_bot_token &&
+          !isTelegramToken(imForm.tg_bot_token.trim())
             ? (t('imValidationInvalidField') as string)
                 .replace('{platform}', t('imTelegramTitle') as string)
                 .replace('{field}', t('tgBotToken') as string)
