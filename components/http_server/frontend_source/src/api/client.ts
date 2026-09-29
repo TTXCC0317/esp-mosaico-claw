@@ -40,6 +40,8 @@ export type AppConfig = {
   wechat_cdn_base_url: string;
   wechat_account_id: string;
   search_brave_key: string;
+  search_provider: string;
+  search_bocha_key: string;
   search_tavily_key: string;
   search_http_allowlist: string;
   enabled_cap_groups: string;
@@ -97,7 +99,13 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'wechat_cdn_base_url',
     'wechat_account_id',
   ],
-  search: ['search_brave_key', 'search_tavily_key', 'search_http_allowlist'],
+  search: [
+    'search_provider',
+    'search_bocha_key',
+    'search_brave_key',
+    'search_tavily_key',
+    'search_http_allowlist',
+  ],
   capabilities: ['enabled_cap_groups', 'llm_visible_cap_groups'],
   skills: ['enabled_lua_modules'],
   time: ['time_timezone'],
@@ -116,6 +124,7 @@ export const SECRET_CONFIG_FIELDS: readonly (keyof AppConfig)[] = [
   'wechat_token',
   'search_brave_key',
   'search_tavily_key',
+  'search_bocha_key',
 ];
 
 /** Build a partial-write patch containing only keys whose values differ
