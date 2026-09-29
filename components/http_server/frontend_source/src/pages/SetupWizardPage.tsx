@@ -28,8 +28,8 @@ import { LabelLink } from '../components/ui/LabelLink';
 import {
   getProviderLinks,
   IM_CREDENTIAL_URLS,
-  TAVILY_API_KEY_URL,
 } from '../constants/externalLinks';
+import { SearchFields, type SearchConfig } from '../components/system/SearchFields';
 import { t } from '../i18n';
 import { appConfig, ensureConfigGroups, patchConfigLocal } from '../state/config';
 import { pushToast } from '../state/toast';
@@ -92,9 +92,7 @@ type ImForm = {
   tg_bot_token: string;
 };
 
-type SearchForm = {
-  search_brave_key: string;
-  search_tavily_key: string;
+type SearchForm = SearchConfig & {
   search_http_allowlist: string;
 };
 
@@ -287,6 +285,8 @@ function imFromConfig(config: Partial<AppConfig>): ImForm {
 
 function searchFromConfig(config: Partial<AppConfig>): SearchForm {
   return {
+    search_provider: config.search_provider ?? 'tavily',
+    search_bocha_key: config.search_bocha_key ?? '',
     search_brave_key: config.search_brave_key ?? '',
     search_tavily_key: config.search_tavily_key ?? '',
     search_http_allowlist: config.search_http_allowlist ?? '',
@@ -327,6 +327,8 @@ function imToPatch(form: ImForm): Partial<AppConfig> {
 
 function searchToPatch(form: SearchForm): Partial<AppConfig> {
   return {
+    search_provider: form.search_provider,
+    search_bocha_key: form.search_bocha_key.trim(),
     search_brave_key: form.search_brave_key.trim(),
     search_tavily_key: form.search_tavily_key.trim(),
     search_http_allowlist: form.search_http_allowlist.trim(),
@@ -808,7 +810,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
         ? (validatePlatform(t('imTelegramTitle') as string, [
             [imForm.tg_bot_token, t('tgBotToken') as string],
           ]) ??
-          (!isTelegramToken(imForm.tg_bot_token.trim())
+          (imForm.tg_bot_token.trim() !== imBaseline.tg_bot_token && !isTelegramToken(imForm.tg_bot_token.trim())
             ? (t('imValidationInvalidField') as string)
                 .replace('{platform}', t('imTelegramTitle') as string)
                 .replace('{field}', t('tgBotToken') as string)
@@ -1226,20 +1228,9 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
 
                 <Match when={step() === 2}>
                   <div class="grid gap-4 sm:grid-cols-2">
-                    <TextInput
-                      type="password"
-                      label={
-                        <>
-                          {t('webreqTavilyKey')}
-                          <LabelLink href={TAVILY_API_KEY_URL}>
-                            {t('llmProviderConsole') as string} ↗
-                          </LabelLink>
-                        </>
-                      }
-                      value={searchForm.search_tavily_key}
-                      onInput={(event) =>
-                        setSearchForm('search_tavily_key', event.currentTarget.value)
-                      }
+                    <SearchFields
+                      form={searchForm}
+                      onChange={(field, value) => setSearchForm(field, value)}
                     />
                     <TextInput
                       label={t('webreqHttpAllowlist')}

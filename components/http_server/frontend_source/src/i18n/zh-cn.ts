@@ -203,9 +203,11 @@ export const zhCn: Dict = {
   wechatLoginOpenLink: '打开登录链接',
 
   sectionWebReqSearch: '搜索',
-  webreqSearchNote: '可选。如填写，ESP-Claw 可在运行中检索在线资源。',
+  webreqSearchNote: '仅使用所选服务的 API Key，缺少 Key 或请求失败时不会自动切换。保存并重启后生效。',
   sectionWebReqNetwork: '网络请求',
   webreqBraveKey: 'Brave Search API Key',
+  webreqSearchProvider: '搜索服务',
+  webreqBochaKey: 'Bocha API Key',
   webreqTavilyKey: 'Tavily API Key',
   webreqHttpAllowlist: 'HTTP 白名单（域名/IP，逗号分隔）',
   webreqHttpAllowlistPlaceholder: 'api.example.com,*.example.org,203.0.113.10',
