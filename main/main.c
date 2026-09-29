@@ -104,10 +104,7 @@ static esp_err_t main_register_ai_create_capability(
 {
     (void)config;
     (void)paths;
-    ESP_RETURN_ON_ERROR(cap_im_ai_create_register_group(), TAG,
-                        "Failed to register Mosaico AI Create capability");
-    return claw_event_router_register_outbound_binding(
-        CAP_IM_AI_CREATE_CHANNEL, "ai_create_send_message");
+    return cap_im_ai_create_register_group();
 }
 
 static bool main_asr_config_changed(
