@@ -881,7 +881,7 @@ static void camera_capture_task(void *ctx)
             break;
         }
         if (!preview_frame_logged) {
-            ESP_LOGI(TAG, "First camera preview frame rendered");
+            ESP_LOGI(TAG, "First camera preview frame converted");
             preview_frame_logged = true;
         }
         mosaic_camera_tick(ui);
