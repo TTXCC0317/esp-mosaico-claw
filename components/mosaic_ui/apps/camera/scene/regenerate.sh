@@ -17,14 +17,13 @@ trap 'rm -rf "$OUT"' EXIT
 
 "$GSPC" build "${STEM}_480.json" --scene-id 0 \
     --profile "$PROFILE" -o "$OUT"
-"$GSPC" build "${STEM}_assets_480.json" --scene-id 1 \
-    --profile "$PROFILE" -o "$OUT"
 
 mkdir -p "$GENERATED_DIR"
+# Keep resource IDs aligned with the scene after excluding canvas seeds.
 "$GSPC" bundle -o "$GENERATED_DIR/${STEM}.gspb" \
     "$OUT/${STEM}.gsb" \
     "$OUT"/${STEM}_font*.gfb \
-    $(if [[ -f "$OUT/${STEM}_assets.grb" ]]; then echo "$OUT/${STEM}_assets.grb"; fi)
+    "$OUT/${STEM}.grb"
 
 cp "$OUT/${STEM}_binds.h" "$GENERATED_DIR/${STEM}_binds.h"
 cp "$OUT/${STEM}_actions.h" "$GENERATED_DIR/${STEM}_actions.h"

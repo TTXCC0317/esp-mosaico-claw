@@ -50,7 +50,10 @@ FONT_POLICIES = {
 
 
 def main():
-    objs, content = shared_prefix(IMAGES, FONT_POLICIES, BOLD)
+    # Dynamic canvases must not share resource views with hidden seed images.
+    canvas_images = {f"{CAMERA_ASSETS}/camera_canvas_fullscreen.png", f"{ASSETS}/black_placeholder.png"}
+    seed_images = [image for image in IMAGES if image[0] not in canvas_images]
+    objs, content = shared_prefix(seed_images, FONT_POLICIES, BOLD)
     page = len(objs)
     objs.append(layer(content, 0, 0, CONTENT_W, CONTENT_H, name="camera_root"))
     build_camera_page(objs, page, ASSETS, CAMERA_ASSETS)
