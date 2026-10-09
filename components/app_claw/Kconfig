@@ -417,12 +417,12 @@ menu "App Claw Config"
                 Enable the LCD Lua module and keep app_claw's direct dependency
                 on lua_module_lcd when Lua capability is enabled.
 
-        config APP_CLAW_LUA_MODULE_LEDC
-            bool "Enable LEDC Lua module"
+        config APP_CLAW_LUA_DRIVER_LEDC
+            bool "Enable LEDC Lua driver"
             default y
             help
-                Enable the LEDC Lua module and keep app_claw's direct dependency
-                on lua_module_ledc when Lua capability is enabled.
+                Enable the LEDC Lua driver and keep app_claw's direct dependency
+                on lua_driver_ledc when Lua capability is enabled.
 
         config APP_CLAW_LUA_MODULE_LED_STRIP
             bool "Enable LED strip Lua module"
