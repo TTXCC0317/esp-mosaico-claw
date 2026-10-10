@@ -170,16 +170,16 @@ devices:
     peripherals:
       - name: i2c_master                   # I2C peripheral for touch communication
 
-  # Board-mounted 6-axis IMU. Production test probes it at 7-bit 0x68.
+  # Board-mounted 6-axis IMU on the BSP I2C bus (7-bit 0x69).
   - name: imu_sensor
     chip: bmi270
     type: custom
     version: default
     init_skip: true
     dependencies:
-      espressif2022/bmi270: "^1.1.0"
+      espressif/bmi270_sensor: "^0.4.1"
     config:
-      addr: 0x68
+      addr: 0x69
     peripherals:
       - name: i2c_master
 
@@ -189,8 +189,7 @@ devices:
     version: default
     init_skip: true
     dependencies:
-      tangyumei3535/bmm150_sensorapi:
-        version: "^1.0.0"
+      espressif/bmm150: "1.1.0"
     config:
       addr: 0x22
     peripherals:
