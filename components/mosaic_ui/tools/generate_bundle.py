@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
+"""Generate one Mosaic app bundle with native Python and GSPC processes."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+UI_ROOT = Path(__file__).resolve().parents[1]
+ASSET_SCENES = {"bluetooth", "env", "imu", "settings", "tof", "works"}
+TEMPLATE_MODULES = {"hub", "album", "settings", "weather"}
+ICON_GENERATORS = {
+    "settings": "generate_root_icon_data.py",
+    "weather": "generate_forecast_icon_data.py",
+}
+WELCOME_SCENES = ("welcome_intro", "welcome_keys", "welcome_g1", "welcome_g2", "welcome_g4")
+
+
+def resolve_gspc(executable: Path) -> Path:
+    """Accept an executable path or a command name on PATH."""
+    return Path(shutil.which(str(executable)) or executable).resolve()
+
+
+def scene_profile(module_dir: Path, override: Path | None = None) -> Path:
+    # Album and Welcome use fixed profiles independent of the global override.
+    if module_dir.name == "welcome":
+        return module_dir / "scene/esp32s31_rgb565_compact.yaml"
+    if module_dir.name != "album" and override is not None:
+        return override.resolve()
+    return UI_ROOT / "common/mosaic_rgb565_auto.yaml"
+
+
+def build_scene(module_dir: Path, gspc: Path, output_dir: Path,
+                *, profile: Path | None = None, generator: Path | None = None,
+                bundle_name: str | None = None, gsp_root: Path | None = None) -> Path:
+    module_dir = module_dir.resolve()
+    output_dir = output_dir.resolve()
+    scene_dir = module_dir / "scene"
+    module = module_dir.name
+    stem = "mosaic_hub" if module == "hub" else module
+    bundle = output_dir / (bundle_name or ("hub_480" if module == "hub" else module))
+    bundle = bundle.with_suffix(".gspb")
+    profile = scene_profile(module_dir, profile)
+    generator = (generator or scene_dir / ("gen_scenes.py" if module == "hub" else "gen_scene.py")).resolve()
+    env = os.environ.copy()
+    env["MOSAIC_GENERATED_DIR"] = str(output_dir)
+    if gsp_root is not None:
+        env["GSP_ROOT"] = env["ESP_GSP_ROOT"] = str(gsp_root.resolve())
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, (
+            str(gsp_root.resolve() / "tools"), env.get("PYTHONPATH"))))
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def run(*args: str | Path) -> None:
+        subprocess.run([str(arg) for arg in args], cwd=scene_dir, env=env, check=True)
+
+    with tempfile.TemporaryDirectory(prefix="mosaic-") as temporary:
+        out = Path(temporary)
+        if module == "welcome":
+            prepared = out / "prepared"
+            prepared.mkdir()
+            scenes = []
+            for scene in WELCOME_SCENES:
+                path = prepared / f"{scene}.json"
+                run(sys.executable, generator, scene, path, env.get("MOSAIC_WELCOME_WIDTH", "480"))
+                scenes.append(path)
+            run(gspc, "pack", *scenes, "--profile", profile, "-o", bundle,
+                "--gen-dir", out / "generated", "--api-header", out / "welcome_gsp.h",
+                "--symbol", "welcome_bundle")
+            for scene in WELCOME_SCENES:
+                for suffix in ("actions", "binds", "objects"):
+                    name = f"{scene}_{suffix}.h"
+                    matches = list((out / "generated").rglob(name))
+                    if len(matches) != 1:
+                        raise RuntimeError(f"expected one generated {name}, found {len(matches)}")
+                    shutil.copyfile(matches[0], output_dir / name)
+        else:
+            run(sys.executable, generator)
+            if module in ICON_GENERATORS:
+                run(sys.executable, scene_dir / ICON_GENERATORS[module])
+            run(gspc, "build", f"{stem}_480.json", "--scene-id", "0",
+                "--profile", profile, "-o", out)
+            if module in ASSET_SCENES:
+                run(gspc, "build", f"{stem}_assets_480.json", "--scene-id", "1",
+                    "--profile", profile, "-o", out)
+            fonts = sorted(out.glob("*.gfb" if module == "interact" else f"{stem}_font*.gfb"))
+            if not fonts:
+                raise RuntimeError(f"GSPC did not generate fonts for {module}")
+            resources = []
+            if module == "interact":
+                resources = sorted(out.glob("*.grb"))
+                if not resources:
+                    raise RuntimeError("GSPC did not generate interact resources")
+            elif module not in {"ai_create", "breakout"}:
+                resource_stem = f"{stem}_assets" if module in ASSET_SCENES - {"bluetooth"} else stem
+                resource = out / f"{resource_stem}.grb"
+                if module in {"hub", "camera", "weather"} or resource.is_file():
+                    resources.append(resource)
+            run(gspc, "bundle", "-o", bundle, out / f"{stem}.gsb", *fonts, *resources)
+            suffixes = ["binds", "actions", "objects"]
+            if module in TEMPLATE_MODULES:
+                suffixes.append("templates")
+            for suffix in suffixes:
+                name = f"{stem}_{suffix}.h"
+                shutil.copyfile(out / name, output_dir / name)
+            if module == "ai_create":
+                for path in [bundle, *(output_dir / f"{stem}_{suffix}.h" for suffix in suffixes)]:
+                    path.chmod(0o644)
+    print(f"app bundle: {bundle}")
+    return bundle
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--module-dir", type=Path, required=True)
+    parser.add_argument("--gspc", type=Path, default=os.environ.get("GSPC"))
+    parser.add_argument("--gsp-root", type=Path, default=os.environ.get("ESP_GSP_ROOT", os.environ.get("GSP_ROOT")))
+    parser.add_argument("--output-dir", type=Path, default=os.environ.get("MOSAIC_GENERATED_DIR"))
+    parser.add_argument("--profile", type=Path, default=os.environ.get("MOSAIC_SCENE_PROFILE"))
+    parser.add_argument("--generator", type=Path)
+    parser.add_argument("--bundle-name")
+    args = parser.parse_args()
+    if args.gspc is None:
+        parser.error("pass --gspc or set GSPC to the GSPC executable")
+    try:
+        build_scene(args.module_dir, resolve_gspc(args.gspc),
+                    args.output_dir or args.module_dir / "generated", profile=args.profile,
+                    generator=args.generator, bundle_name=args.bundle_name, gsp_root=args.gsp_root)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"mosaic: scene generation failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
