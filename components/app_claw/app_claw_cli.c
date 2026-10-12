@@ -43,6 +43,7 @@
 #include "display_service.h"
 
 static const char *TAG = "app_claw_cli";
+static claw_hw_registry_handle_t s_hw_registry;
 static const size_t CAP_OUTPUT_BUF_SIZE = 8192;
 
 static uint32_t s_next_request_id = 1;
@@ -637,6 +638,47 @@ static int cmd_ls(int argc, char **argv)
 }
 #endif
 
+static int cmd_hwmap(int argc, char **argv)
+{
+    const char *resource = NULL;
+    if (argc != 1) {
+        if (argc != 3 || strcmp(argv[1], "query") != 0) {
+            printf("Usage: hwmap [query <resource>]\n");
+            return 1;
+        }
+        resource = argv[2];
+    }
+    size_t count = 0;
+    size_t capacity = 0;
+    claw_hw_entry_t *entries = NULL;
+    esp_err_t err = ESP_OK;
+    for (unsigned attempt = 0; attempt < 3; attempt++) {
+        err = claw_hw_registry_query(s_hw_registry, resource, entries, capacity, &count);
+        if (err != ESP_ERR_INVALID_SIZE) break;
+        free(entries);
+        entries = calloc(count, sizeof(*entries));
+        if (!entries) {
+            err = ESP_ERR_NO_MEM;
+            break;
+        }
+        capacity = count;
+    }
+    if (err == ESP_OK) {
+        printf("%-10s %-28s %-5s %-10s %s\n", "POLICY", "RESOURCE", "USERS", "CLAIM", "OWNER");
+        for (size_t i = 0; i < count; i++) {
+            const claw_hw_entry_t *entry = &entries[i];
+            printf("%-10s %-28s %-5u %-10" PRIu64 " %s\n",
+                   entry->policy == CLAW_HW_SHARED ? "SHARED" : "EXCLUSIVE", entry->resource,
+                   (unsigned)entry->users, entry->claim_id, entry->owner[0] ? entry->owner : "(free)");
+        }
+        printf("(%u entries)\n", (unsigned)count);
+    } else {
+        printf("hwmap: %s\n", esp_err_to_name(err));
+    }
+    free(entries);
+    return err == ESP_OK ? 0 : 1;
+}
+
 static void register_cap_cli_commands(void)
 {
 #if CONFIG_APP_CLAW_CAP_LUA
@@ -653,8 +695,10 @@ static void register_cap_cli_commands(void)
 #endif
 }
 
-esp_err_t app_claw_cli_start(void)
+esp_err_t app_claw_cli_start(claw_hw_registry_handle_t registry)
 {
+    if (!registry) return ESP_ERR_INVALID_ARG;
+    s_hw_registry = registry;
     esp_console_repl_t *repl = NULL;
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
 
@@ -733,6 +777,15 @@ esp_err_t app_claw_cli_start(void)
         ESP_ERROR_CHECK(esp_console_cmd_register(&ls_cmd));
     }
 #endif
+
+    {
+        esp_console_cmd_t hwmap_cmd = {
+            .command = "hwmap",
+            .help = "Dump the hardware lease registry: hwmap [query <resource>]",
+            .func = cmd_hwmap,
+        };
+        ESP_ERROR_CHECK(esp_console_cmd_register(&hwmap_cmd));
+    }
 
     printf("Type 'help' to list commands, or 'ls [keyword]' to list files\n");
     return esp_console_start_repl(repl);

@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "claw_hw_registry.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -71,7 +72,7 @@ esp_err_t app_claw_set_save_config_callback(app_claw_save_config_fn save_config,
                                             void *user_ctx);
 esp_err_t app_claw_set_network_ready_callback(app_claw_network_ready_fn network_ready,
                                               void *user_ctx);
-esp_err_t app_claw_start(const app_claw_config_t *config);
+esp_err_t app_claw_start(const app_claw_config_t *config, claw_hw_registry_handle_t registry);
 esp_err_t app_claw_update_config(const app_claw_config_t *config);
 esp_err_t app_claw_get_config(app_claw_config_t *out_config);
 esp_err_t app_claw_apply_config(const app_claw_config_t *config);

@@ -12,9 +12,6 @@ idf_component_register(
         esp_hw_support
         esp_lcd_touch_mux
         esp_wifi
-        espressif__cjson
-        espressif__bq27220
-        espressif2022__bmi270
         gen_bmgr_codes
         mosaico_camera_service
         mosaico_bsp_bmgr_bridge

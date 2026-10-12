@@ -5,7 +5,6 @@
  */
 #include "app_claw.h"
 #include "app_claw_cli.h"
-#include "app_claw_hw_bridge.h"
 #include "app_capabilities.h"
 #include "audio_hub.h"
 #if CONFIG_APP_CLAW_SYSTEM_UI_ENABLE
@@ -823,7 +822,7 @@ static esp_err_t build_storage_paths(app_claw_storage_paths_t *paths)
     return ESP_OK;
 }
 
-esp_err_t app_claw_start(const app_claw_config_t *config)
+esp_err_t app_claw_start(const app_claw_config_t *config, claw_hw_registry_handle_t registry)
 {
     app_claw_storage_paths_t paths;
 #if CONFIG_APP_CLAW_CAP_CORE
@@ -845,10 +844,10 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
     ESP_RETURN_ON_ERROR(app_claw_store_current_config(config), TAG, "Failed to store Claw config");
     ESP_RETURN_ON_ERROR(build_storage_paths(&paths), TAG, "Failed to resolve storage paths");
 
-    esp_err_t hw_err = app_claw_hw_bridge_register_board_devices();
-    if (hw_err != ESP_OK) {
-        ESP_LOGW(TAG, "hw bridge register skipped/failed: %s", esp_err_to_name(hw_err));
-    }
+    ESP_RETURN_ON_FALSE(registry != NULL, ESP_ERR_INVALID_ARG, TAG, "hardware registry is required");
+#if CONFIG_APP_CLAW_CAP_LUA
+    ESP_RETURN_ON_ERROR(cap_lua_set_hw_registry(registry), TAG, "bind Lua hardware registry failed");
+#endif
     app_claw_audio_start_service();
 
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
@@ -971,7 +970,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #endif
 
 #if CONFIG_APP_CLAW_ENABLE_CLI
-    ESP_RETURN_ON_ERROR(app_claw_cli_start(), TAG, "Failed to start CLI");
+    ESP_RETURN_ON_ERROR(app_claw_cli_start(registry), TAG, "Failed to start CLI");
 #endif
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     ESP_RETURN_ON_ERROR(app_claw_publish_startup_event(), TAG,
