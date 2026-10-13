@@ -10,6 +10,7 @@
 #include "display_service.h"
 #include "app_fs.h"
 #include "app_factory_reset.h"
+#include "app_recovery.h"
 #include "claw_version.h"
 #include "claw_paths.h"
 #include "edge_agent_version.h"
@@ -980,6 +981,8 @@ void app_main(void)
         esp_err_t recovery_err = app_fs_wait_recovery();
         if (recovery_err != ESP_OK) {
             ESP_LOGW(TAG, "DATA recovery incomplete: %s", esp_err_to_name(recovery_err));
+        } else {
+            ESP_ERROR_CHECK_WITHOUT_ABORT(app_recovery_mark_healthy());
         }
         app_free_runtime_state();
         return;
@@ -1126,6 +1129,12 @@ void app_main(void)
 #if CONFIG_APP_CLAW_CAP_IM_LOCAL
     ESP_ERROR_CHECK(http_server_webim_bind_im());
 #endif
+
+    /* Confirm local startup before waiting for Wi-Fi. An offline or unpaired
+     * device is healthy; incomplete filesystem recovery is not. */
+    if (recovery_err == ESP_OK) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(app_recovery_mark_healthy());
+    }
 
 #if CONFIG_APP_CLAW_MOSAIC_GSP_ENABLE
     if (wifi_err == ESP_OK && s_config->wifi_ssid[0] != '\0') {

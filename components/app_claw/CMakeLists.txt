@@ -48,9 +48,15 @@ idf_component_register(
         ${app_claw_srcs}
     INCLUDE_DIRS
         "include"
+    PRIV_INCLUDE_DIRS
+        "../../third-party/esp-mosaico-utils/esp-mosaico-recovery/include"
     REQUIRES
         claw_hw_registry
     PRIV_REQUIRES
+        bootloader_support
+        esp_partition
+        esp_system
+        nvs_flash
         console
         display_service
         esp_board_manager
