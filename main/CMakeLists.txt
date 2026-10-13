@@ -2,6 +2,7 @@ idf_component_register(
     SRC_DIRS "." "platform"
     INCLUDE_DIRS "." "platform"
     PRIV_REQUIRES
+        app_update
         app_settings_service
         app_system_config
         audio_hub
