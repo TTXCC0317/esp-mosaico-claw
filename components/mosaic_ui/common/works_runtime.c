@@ -38,6 +38,7 @@ typedef struct {
     char *display_name;
     char *entry;
     char *args_json;
+    char *icon_path;
     int order;
     bool builtin;
     works_runtime_state_t state;
@@ -71,6 +72,7 @@ typedef struct {
     char *recent_ids[WORKS_RUNTIME_RECENT_LIMIT];
     size_t recent_count;
     uint32_t revision;
+    uint32_t icon_revision;
     bool recents_loaded;
     bool recent_dirty;
     bool job_callback_registered;
@@ -121,6 +123,7 @@ static void item_free(works_item_t *item)
     free(item->display_name);
     free(item->entry);
     free(item->args_json);
+    free(item->icon_path);
     memset(item, 0, sizeof(*item));
 }
 
@@ -209,6 +212,17 @@ static esp_err_t collect_catalog(const app_registry_entry_t *entry,
         item_free(item);
         return ESP_ERR_NO_MEM;
     }
+    if (entry->icon) {
+        if (strlen(entry->icon) >= WORKS_RUNTIME_ICON_PATH_MAX) {
+            ESP_LOGW(TAG, "icon path too long: app=%s", entry->app_id);
+        } else {
+            item->icon_path = strdup(entry->icon);
+            if (!item->icon_path) {
+                item_free(item);
+                return ESP_ERR_NO_MEM;
+            }
+        }
+    }
     item->order = entry->order;
     item->builtin = entry->manage_mode == APP_REGISTRY_MANAGE_MODE_READONLY;
     item->state = WORKS_RUNTIME_STOPPED;
@@ -243,6 +257,7 @@ static bool catalog_equal_locked(const works_item_t *items, size_t count)
                 strcmp(old->id, next->id) != 0 ||
                 strcmp(old->display_name, next->display_name) != 0 ||
                 strcmp(old->entry, next->entry) != 0 ||
+                !optional_equal(old->icon_path, next->icon_path) ||
                 !optional_equal(old->args_json, next->args_json)) {
             return false;
         }
@@ -685,6 +700,9 @@ esp_err_t works_runtime_refresh(void)
 static void works_apps_changed(void *user_ctx)
 {
     (void)user_ctx;
+    xSemaphoreTake(s_runtime.lock, portMAX_DELAY);
+    ++s_runtime.icon_revision;
+    xSemaphoreGive(s_runtime.lock);
     esp_err_t err = works_runtime_refresh();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "refresh App catalog failed: %s", esp_err_to_name(err));
@@ -758,6 +776,10 @@ static void snapshot_item(const works_item_t *item,
     memset(out, 0, sizeof(*out));
     strlcpy(out->app_id, item->id, sizeof(out->app_id));
     strlcpy(out->display_name, item->display_name, sizeof(out->display_name));
+    if (item->icon_path) {
+        strlcpy(out->icon_path, item->icon_path, sizeof(out->icon_path));
+    }
+    out->icon_revision = s_runtime.icon_revision;
     out->builtin = item->builtin;
     out->state = item->state;
     strlcpy(out->last_error, item->last_error, sizeof(out->last_error));
