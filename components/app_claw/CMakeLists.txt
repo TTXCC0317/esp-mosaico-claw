@@ -49,7 +49,7 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     PRIV_INCLUDE_DIRS
-        "../../third-party/esp-mosaico-utils/esp-mosaico-recovery/include"
+        "../../third-party/esp-mosaico-utils/esp-mosaico-vibe-mode/include"
     REQUIRES
         claw_hw_registry
     PRIV_REQUIRES

@@ -27,6 +27,17 @@ Connect the device, then flash the firmware and open the serial monitor:
 idf.py -p PORT flash monitor
 ```
 
+### 使用当前源码构建的 Vibe Mode
+
+默认完整烧录使用 utils 中的预编译包。需要包含尚未发布的 Vibe Mode 修改时，先在其工程中执行 `idf.py recovery-current-bundle`，再将生成的 `recovery-current` 目录传给主项目：
+
+```bash
+idf.py -D ESP_MOSAICO_VIBE_MODE_BUNDLE=/absolute/path/to/recovery-current build
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+该配置会保存在构建缓存中；源码再次修改后，需要重新构建并打包 Vibe Mode。完整烧录保留应用 NVS 和 Vibe Mode 的 sysmeta 数据；仅更新主应用和资源可使用 `idf.py -p /dev/ttyACM0 update-flash`。
+
 ## Repository Layout
 
 ```text
