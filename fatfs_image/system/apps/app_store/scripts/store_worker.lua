@@ -64,7 +64,7 @@ local function fetch(path, target, limit)
 end
 
 local function refresh()
-    progress("正在获取应用目录")
+    progress("Fetching app catalog")
     local entries = fetch("/raw/apps-data.json")
     assert(type(entries) == "table", "invalid catalog")
     local list, seen = {}, {}
@@ -90,7 +90,7 @@ local function refresh()
         cancelled()
         local target = cache .. "/" .. item.id .. ".jpg"
         if valid_path(item.icon) and not storage.exists(target) then
-            progress("缓存图标 " .. i .. "/" .. #list)
+            progress("Caching icon " .. i .. "/" .. #list)
             local ok, err = pcall(fetch, "/raw/apps/" .. item.id .. "/" .. encode(item.icon), target, 65536)
             if not ok then print("[AppStore] icon " .. item.id .. ": " .. tostring(err)) end
         end
@@ -102,7 +102,7 @@ local function install()
     assert(valid_id(a.id) and a.id ~= "app_store", "invalid App id")
     local target = storage.join_path(root, "apps", a.id)
     assert(not storage.exists(target) and not storage.exists("/system/apps/" .. a.id), "App already installed")
-    progress("检查应用文件")
+    progress("Checking app files")
     local meta = fetch("/raw/apps/" .. a.id .. "/_metadata.json")
     assert(type(meta) == "table" and meta.kind == "app" and meta.name == a.id, "App metadata mismatch")
     assert(type(meta.files) == "table" and #meta.files > 0 and #meta.files <= 512, "invalid file list")
@@ -118,7 +118,7 @@ local function install()
     assert(free > (tonumber(a.size) or 0) + 65536, "Not enough storage")
     mkdir(stage)
     for i, path in ipairs(meta.files) do
-        progress("下载 " .. i .. "/" .. count, math.floor((i - 1) * 100 / count))
+        progress("Downloading " .. i .. "/" .. count, math.floor((i - 1) * 100 / count))
         local file = stage .. "/" .. path
         mkdir(assert(file:match("^(.+)/[^/]+$")))
         fetch("/raw/apps/" .. a.id .. "/" .. encode(path), file)
@@ -131,7 +131,7 @@ local function install()
     assert(not storage.exists(target), "App appeared during download")
     storage.rename(stage, target)
     installed_path = target
-    progress("正在发布应用", 100)
+    progress("Publishing app", 100)
     local result = json.decode(call("publish_app", { app_id = a.id }))
     assert(result.ok == true, "App publication failed")
     installed_path = nil
