@@ -17,7 +17,6 @@ from scene_common import (  # noqa: E402
     CONTENT_H,
     CONTENT_W,
     app_root_shell,
-    asset_scene,
     auto_charset,
     button,
     container,
@@ -37,7 +36,8 @@ ROW_COUNT = 4
 STATE_CHARSET = ASCII_PRINTABLE
 META_CHARSET = ASCII_PRINTABLE + "·"
 
-IMAGES: list[tuple[str, int, int]] = []
+PLACEHOLDER = "../../../common/assets/black_placeholder.png"
+IMAGES = [(PLACEHOLDER, 48, 48)]
 FONT_POLICIES = {
     14: auto_charset(),
     15: explicit_charset(META_CHARSET),
@@ -89,7 +89,7 @@ def status_layer(objs, parent, row_index, name, text, color):
         bind_target="visible",
         name=f"works_row_{row_index}_{name}",
     ))
-    objs.append(container(state, 16, 22, 8, 8, bg=color, radius=4))
+    objs.append(container(state, 320, 30, 8, 8, bg=color, radius=4))
     state_label = label(
         state, 320, 20, 140, 28, text, size=17, color=color,
         align="right",
@@ -115,15 +115,29 @@ def works_row(objs, parent, row_index):
         events=events,
     ))
 
+    # Keep the default tile underneath the asynchronous image layer.
+    objs.append(container(row, 16, 8, 48, 48, bg="#242424", radius=10))
+    objs.append(label(row, 16, 23, 48, 20, "APP", size=14, color="#91919B", align="center"))
+    icon = len(objs)
+    objs.append(layer(row, 16, 8, 48, 48, hidden=True,
+                      name=f"works_row_{row_index}_icon_layer",
+                      bind=f"works_row_{row_index}_icon_visible", bind_target="visible"))
+    objs.append({
+        "type": "image", "parent": icon, "x": 0, "y": 0, "w": 48, "h": 48,
+        "image": PLACEHOLDER, "codec": "raw", "fit": "contain", "dynamic_image": True,
+        "name": f"works_row_{row_index}_icon", "bind": f"works_row_{row_index}_icon",
+        "events": events,
+    })
+
     title = label(
-        row, 38, 8, 270, 28, "", size=22, color="#FCFCFF",
+        row, 76, 8, 232, 28, "", size=22, color="#FCFCFF",
         bind=f"works_row_{row_index}_name",
         font_charset=ASCII_PRINTABLE,
     )
     title["overflow"] = "ellipsis"
     objs.append(title)
     meta = label(
-        row, 38, 36, 270, 20, "", size=15, color="#595959",
+        row, 76, 36, 232, 20, "", size=15, color="#595959",
         bind=f"works_row_{row_index}_meta",
         font_charset=META_CHARSET,
     )
@@ -184,8 +198,6 @@ def main():
     build_works_ui(objs, content)
     write_scene(scene_out_path(HERE, "works_480.json"), "works", objs,
                 font=FONT)
-    asset_scene(scene_out_path(HERE, "works_assets_480.json"),
-                "works_assets", IMAGES, FONT_POLICIES, BOLD, FONT)
 
 
 if __name__ == "__main__":

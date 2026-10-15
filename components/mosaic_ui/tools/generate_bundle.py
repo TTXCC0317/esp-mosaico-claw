@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 UI_ROOT = Path(__file__).resolve().parents[1]
-ASSET_SCENES = {"bluetooth", "env", "imu", "settings", "tof", "works"}
+ASSET_SCENES = {"bluetooth", "env", "imu", "settings", "tof"}
 TEMPLATE_MODULES = {"hub", "album", "settings", "weather"}
 ICON_GENERATORS = {
     "settings": "generate_root_icon_data.py",
