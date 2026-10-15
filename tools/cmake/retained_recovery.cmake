@@ -12,10 +12,8 @@ endif()
 # Blank otadata selects Claw instead of the upstream Vibe Mode marker.
 string(ASCII 255 recovery_erased_byte)
 string(REPEAT "${recovery_erased_byte}" 8192 recovery_otadata)
-string(REPEAT "${recovery_erased_byte}" 24576 recovery_nvs)
 string(REPEAT "${recovery_erased_byte}" 81920 recovery_sysmeta)
 file(GENERATE OUTPUT "${recovery_output}/ota_data_claw.bin" CONTENT "${recovery_otadata}")
-file(GENERATE OUTPUT "${recovery_output}/nvs_initial.bin" CONTENT "${recovery_nvs}")
 file(GENERATE OUTPUT "${recovery_output}/sysmeta_initial.bin" CONTENT "${recovery_sysmeta}")
 
 add_custom_target(retained-recovery ALL
@@ -52,13 +50,12 @@ esptool_py_flash_to_partition(app-flash main_app "${recovery_build_dir}/${recove
 esptool_py_flash_target_image(bootloader-flash bootloader 0x2000 "${recovery_output}/bootloader.bin")
 add_dependencies(bootloader-flash retained-recovery)
 
-# 'flash' is an INITIAL INSTALL: resets application NVS and Recovery sysmeta.
+# Full installation preserves application NVS but resets OTA selection and Recovery sysmeta.
 esptool_py_flash_target_image(flash bootloader 0x2000 "${recovery_output}/bootloader.bin")
 esptool_py_flash_target_image(flash partition-table 0x8000 "${recovery_build_dir}/partition_table/partition-table.bin")
 esptool_py_flash_to_partition(flash otadata "${recovery_output}/ota_data_claw.bin")
 esptool_py_flash_to_partition(flash sysmeta "${recovery_output}/sysmeta_initial.bin")
 esptool_py_flash_to_partition(flash vibe_mode "${recovery_output}/factory.bin")
-esptool_py_flash_to_partition(flash nvs "${recovery_output}/nvs_initial.bin")
 esptool_py_flash_target_image(flash app 0x210000 "${recovery_build_dir}/${recovery_app_bin}")
 esptool_py_flash_to_partition(flash ui_apps "${recovery_ui_apps_image}")
 esptool_py_flash_to_partition(flash system "${recovery_system_image}")

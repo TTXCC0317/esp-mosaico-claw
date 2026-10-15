@@ -235,7 +235,7 @@ def main() -> int:
             "installation": {
                 "mode": "initial",
                 "initial_boot": "main_app",
-                "initializes": ["otadata", "nvs", "sysmeta"],
+                "initializes": ["otadata", "sysmeta"],
                 "recovery_version": recovery_manifest["version"],
                 "compatibility": recovery_manifest["compatibility"],
                 "recovery_sha256": recovery_manifest["images"]["recovery"]["sha256"],
