@@ -95,7 +95,7 @@ static const gsp_component_key_t s_row_visibility_keys[WORKS_ROW_COUNT][4] = {
 };
 
 static const char *TAG = "works_app";
-static works_tab_t s_selected_tab;
+static works_tab_t s_selected_tab = WORKS_TAB_INSTALLED;
 static size_t s_installed_page;
 
 #define WORKS_ICON_FILE_MAX (256U * 1024U)
@@ -431,8 +431,8 @@ static void works_event(
     const mosaic_event_t *event = raw_event;
     if (event && event->type == MOSAIC_EVENT_START) {
         (void)esp_gsp_set_text(ui, GSP_BIND_WORKS_COUNT, "0 ITEMS");
-        (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_0_SELECTED, true);
-        (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_1_SELECTED, false);
+        (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_0_SELECTED, false);
+        (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_1_SELECTED, true);
         (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_PAGER_VISIBLE, false);
         works_clear_rows(ui);
     }
