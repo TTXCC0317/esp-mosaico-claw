@@ -61,22 +61,22 @@ def call_event(name: str, arg: int = 0) -> list[dict]:
 def tab_button(objs, parent, x, width, text, index):
     events = call_event("works_select_tab", index)
     objs.append(button(
-        parent, x, 70, width, 40, text,
-        radius=20, size=17, name=f"works_tab_{index}",
+        parent, x, 65, width, 50, text,
+        radius=25, size=22, name=f"works_tab_{index}",
         bg="#000000", fg="#D6D6DE", border="#3B3C3D", border_w=1,
         events=events,
     ))
 
     selected = len(objs)
     objs.append(layer(
-        parent, x, 70, width, 40, hidden=True,
+        parent, x, 65, width, 50, hidden=True,
         bind=f"works_tab_{index}_selected",
         bind_target="visible",
         name=f"works_tab_{index}_selected",
     ))
     objs.append(button(
-        selected, 0, 0, width, 40, text,
-        radius=20, size=17, bg="#FCFCFF", fg="#000000",
+        selected, 0, 0, width, 50, text,
+        radius=25, size=22, bg="#FCFCFF", fg="#000000",
         events=events,
     ))
 
@@ -153,22 +153,22 @@ def works_row(objs, parent, row_index):
 def build_pager(objs, parent):
     pager = len(objs)
     objs.append(layer(
-        parent, 0, 416, CONTENT_W, 38, hidden=True,
+        parent, 0, 408, CONTENT_W, 52, hidden=True,
         bind="works_pager_visible", bind_target="visible",
         name="works_pager",
     ))
     objs.append(button(
-        pager, 138, 2, 56, 34, "‹", bg="#181819", fg="#D6D6DE",
-        radius=17, size=24, events=call_event("works_page_prev"),
+        pager, 124, 5, 70, 43, "‹", bg="#181819", fg="#D6D6DE",
+        radius=22, size=31, events=call_event("works_page_prev"),
     ))
     objs.append(label(
-        pager, 198, 7, 84, 24, "1 / 1", size=14, color="#91919B",
+        pager, 198, 14, 84, 24, "1 / 1", size=14, color="#91919B",
         align="center", bind="works_page_text",
         font_charset=ASCII_PRINTABLE,
     ))
     objs.append(button(
-        pager, 286, 2, 56, 34, "›", bg="#181819", fg="#D6D6DE",
-        radius=17, size=24, events=call_event("works_page_next"),
+        pager, 286, 5, 70, 43, "›", bg="#181819", fg="#D6D6DE",
+        radius=22, size=31, events=call_event("works_page_next"),
     ))
 
 
@@ -186,8 +186,8 @@ def build_works_ui(objs, content):
         font_charset=ASCII_PRINTABLE,
     ))
 
-    tab_button(objs, root, 16, 78, TABS[0], 0)
-    tab_button(objs, root, 102, 96, TABS[1], 1)
+    tab_button(objs, root, 16, 98, TABS[0], 0)
+    tab_button(objs, root, 122, 121, TABS[1], 1)
     for row_index in range(ROW_COUNT):
         works_row(objs, root, row_index)
     build_pager(objs, root)
