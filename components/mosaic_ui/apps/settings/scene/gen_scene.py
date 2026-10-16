@@ -1302,6 +1302,9 @@ def main():
     # gspc does not silently compile only the placeholder glyphs and render
     # later symbols as '?'.
     for obj in objs:
+        # Canvas needs its own resource view even when placeholders are shared.
+        if obj.get("type") == "image" and obj.get("bind", "").endswith("_qr_canvas"):
+            obj["canvas"] = "push"
         if obj.get("type") == "label" and obj.get("bind") and \
                 not obj.get("font_charset"):
             obj["font_charset"] = SETTINGS_RUNTIME_CHARSET

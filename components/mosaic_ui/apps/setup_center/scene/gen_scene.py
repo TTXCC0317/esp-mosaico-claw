@@ -575,6 +575,10 @@ def main():
     build_integrations(objs, page(objs, stack, PAGE_INTEGRATIONS))
     top_notice(objs, content, name="setup_top_notice",
                title="Connection failed", message="Incorrect password")
+    # Canvas needs its own resource view even when placeholders are shared.
+    for obj in objs:
+        if obj.get("type") == "image" and obj.get("bind", "").endswith("_qr_canvas"):
+            obj["canvas"] = "push"
     write_scene(scene_out_path(HERE, "setup_center_480.json"),
                 "setup_center", objs, font=FONT)
 

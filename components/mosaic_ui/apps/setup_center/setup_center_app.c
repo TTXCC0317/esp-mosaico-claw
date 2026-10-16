@@ -53,7 +53,8 @@
 #define SETUP_QR_SIZE 256U
 #define SETUP_QR_STRIDE (SETUP_QR_SIZE * 2U)
 #define SETUP_QR_BYTES ((size_t)SETUP_QR_STRIDE * SETUP_QR_SIZE)
-#define SETUP_QR_FRAME_COUNT 2U
+/* Three retained Canvas frames plus one replacement frame. */
+#define SETUP_QR_FRAME_COUNT 4U
 #define SETUP_QR_QUIET_MODULES 4
 #define SETUP_LLM_QR_SIZE 104U
 #define SETUP_LLM_QR_STRIDE (SETUP_LLM_QR_SIZE * 2U)
