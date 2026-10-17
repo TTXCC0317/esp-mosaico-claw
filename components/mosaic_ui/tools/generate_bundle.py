@@ -51,6 +51,10 @@ def build_scene(module_dir: Path, gspc: Path, output_dir: Path,
     generator = (generator or scene_dir / ("gen_scenes.py" if module == "hub" else "gen_scene.py")).resolve()
     env = os.environ.copy()
     env["MOSAIC_GENERATED_DIR"] = str(output_dir)
+    # Per-scene bind namespace: scene_common.i18n_register() prefixes promoted
+    # bind constants with this stem so identical English strings in two Apps do
+    # not collide inside the single App-registry translation unit.
+    env["MOSAIC_APP_STEM"] = stem
     if gsp_root is not None:
         env["GSP_ROOT"] = env["ESP_GSP_ROOT"] = str(gsp_root.resolve())
         env["PYTHONPATH"] = os.pathsep.join(filter(None, (
