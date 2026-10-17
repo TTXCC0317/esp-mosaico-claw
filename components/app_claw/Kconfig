@@ -344,6 +344,7 @@ menu "App Claw Config"
         config APP_CLAW_LUA_MODULE_ENVIRONMENTAL_SENSOR
             bool "Enable environmental sensor Lua module"
             default n
+            select APP_CLAW_LUA_DRIVER_I2C if LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_BME690
             help
                 Enable the environmental sensor Lua module and keep app_claw's direct
                 dependency on lua_module_environmental_sensor when Lua capability is enabled.
@@ -417,12 +418,12 @@ menu "App Claw Config"
                 Enable the LCD Lua module and keep app_claw's direct dependency
                 on lua_module_lcd when Lua capability is enabled.
 
-        config APP_CLAW_LUA_MODULE_LEDC
-            bool "Enable LEDC Lua module"
+        config APP_CLAW_LUA_DRIVER_LEDC
+            bool "Enable LEDC Lua driver"
             default y
             help
-                Enable the LEDC Lua module and keep app_claw's direct dependency
-                on lua_module_ledc when Lua capability is enabled.
+                Enable the LEDC Lua driver and keep app_claw's direct dependency
+                on lua_driver_ledc when Lua capability is enabled.
 
         config APP_CLAW_LUA_MODULE_LED_STRIP
             bool "Enable LED strip Lua module"
@@ -448,6 +449,7 @@ menu "App Claw Config"
         config APP_CLAW_LUA_MODULE_SCI
             bool "Enable DFRobot SCI Lua module"
             default n
+            select APP_CLAW_LUA_DRIVER_I2C
             help
                 Enable the DFRobot RP2040 SCI Acquisition Module Lua module and
                 keep app_claw's direct dependency on lua_module_sci when Lua

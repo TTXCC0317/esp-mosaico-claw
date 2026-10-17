@@ -17,6 +17,16 @@ def main() -> int:
     args = parser.parse_args()
     try:
         from gsp.execute import executable_from_environment
+    except ImportError as exc:
+        print(
+            f"mosaic: esp-gsp-tools is unavailable or incompatible in {sys.executable}: {exc}\n"
+            f'Install/upgrade it in this Python environment: "{sys.executable}" '
+            "-m pip install -U esp-gsp-tools\n"
+            "In PowerShell, prefix the quoted executable with &.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
         version = (args.component_dir / ".gspc_version").read_text().strip()
         print(executable_from_environment("gspc", version=version))
     except (ImportError, OSError, ValueError, RuntimeError) as exc:

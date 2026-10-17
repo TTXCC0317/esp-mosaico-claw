@@ -23,9 +23,26 @@ extern void __real_app_main(void);
 #include "tinyusb_cdc_acm.h"
 #include "tinyusb_console.h"
 #include "tinyusb_default_config.h"
+#include "device/dcd.h"
+#include "hal/usb_utmi_ll.h"
 
 static const char *TAG = "bsp_usb_console";
 static bool s_initialized;
+
+/* S31 CPU reset leaves HS USB DMA running. Stop it before the next image
+ * reuses RAM, without waiting for or freeing the currently running USB task. */
+static void usb_console_shutdown(void)
+{
+    dcd_int_disable(0);
+    usb_utmi_ll_reset_register();
+    usb_utmi_ll_enable_bus_clock(false);
+}
+
+static void usb_console_driver_uninstall(void)
+{
+    (void)esp_unregister_shutdown_handler(usb_console_shutdown);
+    (void)tinyusb_driver_uninstall();
+}
 
 #if CONFIG_USB_HS_CONSOLE_USB_CDC_MIRROR_LOG_TO_UART
 
@@ -225,6 +242,15 @@ esp_err_t bsp_usb_console_init(void)
         return ret;
     }
 
+    ret = esp_register_shutdown_handler(usb_console_shutdown);
+    if (ret != ESP_OK) {
+        (void)tinyusb_driver_uninstall();
+#if CONFIG_USB_HS_CONSOLE_USB_CDC_AUTO_DOWNLOAD
+        auto_download_deinit();
+#endif
+        return ret;
+    }
+
     const tinyusb_config_cdcacm_t cdc_config = {
         .cdc_port = TINYUSB_CDC_ACM_0,
 #if CONFIG_USB_HS_CONSOLE_USB_CDC_AUTO_DOWNLOAD
@@ -233,7 +259,7 @@ esp_err_t bsp_usb_console_init(void)
     };
     ret = tinyusb_cdcacm_init(&cdc_config);
     if (ret != ESP_OK) {
-        (void)tinyusb_driver_uninstall();
+        usb_console_driver_uninstall();
 #if CONFIG_USB_HS_CONSOLE_USB_CDC_AUTO_DOWNLOAD
         auto_download_deinit();
 #endif
@@ -243,14 +269,14 @@ esp_err_t bsp_usb_console_init(void)
     ret = tinyusb_console_init(TINYUSB_CDC_ACM_0);
     if (ret != ESP_OK) {
         (void)tinyusb_cdcacm_deinit(TINYUSB_CDC_ACM_0);
-        (void)tinyusb_driver_uninstall();
+        usb_console_driver_uninstall();
 #if CONFIG_USB_HS_CONSOLE_USB_CDC_AUTO_DOWNLOAD
         auto_download_deinit();
 #endif
         return ret;
     }
 
-    /* Keep application logs observable even when the host opens CDC after app_main starts. */
+    /* Stream current logs without a history buffer or waiting for a host. */
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
@@ -259,7 +285,7 @@ esp_err_t bsp_usb_console_init(void)
     if (ret != ESP_OK) {
         (void)tinyusb_console_deinit(TINYUSB_CDC_ACM_0);
         (void)tinyusb_cdcacm_deinit(TINYUSB_CDC_ACM_0);
-        (void)tinyusb_driver_uninstall();
+        usb_console_driver_uninstall();
 #if CONFIG_USB_HS_CONSOLE_USB_CDC_AUTO_DOWNLOAD
         auto_download_deinit();
 #endif

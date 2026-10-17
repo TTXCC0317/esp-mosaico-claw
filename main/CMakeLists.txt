@@ -2,6 +2,7 @@ idf_component_register(
     SRC_DIRS "." "platform"
     INCLUDE_DIRS "." "platform"
     PRIV_REQUIRES
+        app_update
         app_settings_service
         app_system_config
         audio_hub
@@ -13,9 +14,6 @@ idf_component_register(
         esp_hw_support
         esp_lcd_touch_mux
         esp_wifi
-        espressif__cjson
-        espressif__bq27220
-        espressif2022__bmi270
         gen_bmgr_codes
         mosaico_camera_service
         mosaico_bsp_bmgr_bridge

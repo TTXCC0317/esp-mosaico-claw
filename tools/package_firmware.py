@@ -121,6 +121,8 @@ def load_sdkconfig(build_dir: Path) -> dict:
 
 
 def resolve_console_output(sdkconfig: dict) -> str:
+    if sdkconfig.get("USB_HS_CONSOLE_USB_CDC_AUTO_INIT") is True:
+        return "USB HS CDC"
     if sdkconfig.get("ESP_CONSOLE_UART") is True:
         return "UART"
     if sdkconfig.get("ESP_CONSOLE_USB_SERIAL_JTAG") is True:
@@ -205,6 +207,7 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        recovery_manifest = json.loads((build_dir / "recovery/manifest.json").read_text())
         flasher_data, flash_size = load_flasher_data(build_dir)
         sdkconfig = load_sdkconfig(build_dir)
         partition_table = extract_partition_table(build_dir, flasher_data)
@@ -229,6 +232,14 @@ def main() -> int:
             "flash_files": flasher_data["flash_files"],
             "flash_settings": flasher_data["flash_settings"],
             "min_flash_size": flash_size,
+            "installation": {
+                "mode": "initial",
+                "initial_boot": "main_app",
+                "initializes": ["otadata", "sysmeta"],
+                "recovery_version": recovery_manifest["version"],
+                "compatibility": recovery_manifest["compatibility"],
+                "recovery_sha256": recovery_manifest["images"]["recovery"]["sha256"],
+            },
             "min_psram_size": 8 if sdkconfig.get("SPIRAM_XIP_FROM_PSRAM") is True else 4 if sdkconfig.get("SPIRAM") is True else 0,
         }
         if nvs_info:

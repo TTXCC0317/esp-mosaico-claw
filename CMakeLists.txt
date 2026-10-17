@@ -24,12 +24,8 @@ include("${CMAKE_SOURCE_DIR}/tools/cmake/flash_partition_defaults.cmake")
 list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/third-party/esp-claw/components/common/esp_video")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-idf_build_set_property(
-    BOOTLOADER_EXTRA_COMPONENT_DIRS
-    "${CMAKE_CURRENT_LIST_DIR}/components/mosaico_boot_splash"
-    APPEND
-)
-project(edge_agent VERSION 0.4.0)
+
+project(edge_agent VERSION 0.5.0)
 
 if(COMMAND esp_mosaico_build_profile_finalize)
     esp_mosaico_build_profile_finalize()
@@ -106,3 +102,6 @@ add_dependencies(skill_builder_sync_skills edge_agent_prepare_system_fs_image)
 add_dependencies(lua_module_builder_sync_builtin_scripts edge_agent_prepare_system_fs_image)
 add_dependencies(lua_module_builder_sync_docs edge_agent_prepare_system_fs_image)
 add_dependencies(littlefs_system_bin edge_agent_prepare_system_fs_image)
+
+# Register after components and resources have declared their flash images.
+include("${CMAKE_SOURCE_DIR}/tools/cmake/retained_recovery.cmake")

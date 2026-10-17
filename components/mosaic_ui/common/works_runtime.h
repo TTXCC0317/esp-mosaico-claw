@@ -17,6 +17,7 @@ extern "C" {
 
 #define WORKS_RUNTIME_APP_ID_MAX 64U
 #define WORKS_RUNTIME_DISPLAY_NAME_MAX 64U
+#define WORKS_RUNTIME_ICON_PATH_MAX 256U
 #define WORKS_RUNTIME_ERROR_MAX    160U
 #define WORKS_RUNTIME_RECENT_LIMIT 4U
 
@@ -31,6 +32,8 @@ typedef enum {
 typedef struct {
     char app_id[WORKS_RUNTIME_APP_ID_MAX];
     char display_name[WORKS_RUNTIME_DISPLAY_NAME_MAX];
+    char icon_path[WORKS_RUNTIME_ICON_PATH_MAX];
+    uint32_t icon_revision;
     bool builtin;
     works_runtime_state_t state;
     char last_error[WORKS_RUNTIME_ERROR_MAX];

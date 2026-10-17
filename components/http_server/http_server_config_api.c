@@ -74,6 +74,8 @@ static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("im",           wechat_account_id),
 
     CONFIG_FIELD("search",       search_brave_key),
+    CONFIG_FIELD("search",       search_provider),
+    CONFIG_FIELD("search",       search_bocha_key),
     CONFIG_FIELD("search",       search_tavily_key),
     CONFIG_FIELD("search",       search_http_allowlist),
 
@@ -201,6 +203,7 @@ static bool is_sensitive_config_field(const char *name)
         "wechat_token",
         "search_brave_key",
         "search_tavily_key",
+        "search_bocha_key",
         NULL,
     };
 
@@ -425,8 +428,20 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     for (size_t i = 0; i < CONFIG_FIELD_COUNT; i++) {
         const config_field_def_t *field = &CONFIG_FIELDS[i];
         cJSON *item = cJSON_GetObjectItemCaseSensitive(root, field->name);
+        if (item && strcmp(field->name, "search_provider") == 0 &&
+                (!cJSON_IsString(item) || (strcmp(item->valuestring, "bocha") != 0 &&
+                 strcmp(item->valuestring, "tavily") != 0 && strcmp(item->valuestring, "brave") != 0))) {
+            cJSON_Delete(root);
+            free(config);
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "search_provider must be bocha/tavily/brave");
+        }
         if (!cJSON_IsString(item)) {
             continue;
+        }
+        if (strcmp(field->group, "search") == 0 && strlen(item->valuestring) >= field->size) {
+            cJSON_Delete(root);
+            free(config);
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Search setting is too long");
         }
         if (strcmp(field->name, "llm_max_tokens") == 0 ||
                 strcmp(field->name, "llm_default_image_max_bytes") == 0) {

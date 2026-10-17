@@ -4,14 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "app_claw.h"
+#include "app_claw_hw_bridge.h"
 #include "app_capabilities.h"
 #include "app_settings_service.h"
 #include "display_service.h"
 #include "app_fs.h"
 #include "app_factory_reset.h"
+#include "app_recovery.h"
 #include "claw_version.h"
 #include "claw_paths.h"
-#include "claw_hw_registry.h"
 #include "edge_agent_version.h"
 #include <string.h>
 #include <stdlib.h>
@@ -22,7 +23,6 @@
 #include "cap_im_ai_create.h"
 #include "cap_interact.h"
 #include "claw_event_router.h"
-#include "claw_hw_registry.h"
 #include "interact_backend.h"
 #include "mosaic_setup.h"
 #include "mosaic_ui.h"
@@ -76,6 +76,7 @@
 
 static const char *TAG = "app";
 
+static claw_hw_registry_handle_t s_hw_registry;
 static EXT_RAM_BSS_ATTR app_config_t *s_config;
 static EXT_RAM_BSS_ATTR app_claw_config_t *s_claw_config;
 static EXT_RAM_BSS_ATTR app_settings_service_handle_t s_app_settings;
@@ -107,10 +108,7 @@ static esp_err_t main_register_ai_create_capability(
 {
     (void)config;
     (void)paths;
-    ESP_RETURN_ON_ERROR(cap_im_ai_create_register_group(), TAG,
-                        "Failed to register Mosaico AI Create capability");
-    return claw_event_router_register_outbound_binding(
-        CAP_IM_AI_CREATE_CHANNEL, "ai_create_send_message");
+    return cap_im_ai_create_register_group();
 }
 
 static esp_err_t main_register_interact_capability(
@@ -913,6 +911,9 @@ void app_main(void)
     mosaic_i18n_set_language(mosaic_i18n_parse(s_config->language));
     app_config_to_claw(s_config, s_claw_config);
     init_timezone(app_config_get_timezone(s_config)); // no need to check error
+    /* BSP setup initializes the custom I2C provider through Board Manager. */
+    ESP_ERROR_CHECK(claw_hw_registry_create(&s_hw_registry));
+    ESP_ERROR_CHECK(app_claw_hw_bridge_init(s_hw_registry));
 #if CONFIG_ESP_BOARD_ESP_MOSAICO
     ESP_ERROR_CHECK(mosaico_bsp_bmgr_init());
     ESP_ERROR_CHECK(trial_auth_validate_hmac_efuse_key());
@@ -920,9 +921,6 @@ void app_main(void)
     ESP_ERROR_CHECK(trial_auth_init());
     ESP_ERROR_CHECK(esp_board_manager_init());
     ESP_ERROR_CHECK(main_install_touch_mux());
-    /* Audio mixer/capture acquire their board devices through the hardware
-     * registry. Initialize it before either service attempts a claim. */
-    ESP_ERROR_CHECK(claw_hw_registry_init());
 #if !CONFIG_APP_CLAW_MOSAIC_GSP_ENABLE
     ESP_ERROR_CHECK(mosaico_camera_service_init());
 #endif
@@ -1042,6 +1040,8 @@ void app_main(void)
         esp_err_t recovery_err = app_fs_wait_recovery();
         if (recovery_err != ESP_OK) {
             ESP_LOGW(TAG, "DATA recovery incomplete: %s", esp_err_to_name(recovery_err));
+        } else {
+            ESP_ERROR_CHECK_WITHOUT_ABORT(app_recovery_mark_healthy());
         }
         app_free_runtime_state();
         return;
@@ -1186,7 +1186,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_board_manager_init_device_by_name(ESP_BOARD_DEVICE_NAME_AUDIO_DAC));
     ESP_ERROR_CHECK(esp_board_manager_init_device_by_name(ESP_BOARD_DEVICE_NAME_AUDIO_ADC));
 #endif
-    ESP_ERROR_CHECK(app_claw_start(s_claw_config));
+    ESP_ERROR_CHECK(app_claw_start(s_claw_config, s_hw_registry));
 #if CONFIG_APP_CLAW_MOSAIC_GSP_ENABLE
     ESP_ERROR_CHECK(weather_service_start());
 #endif
@@ -1204,6 +1204,12 @@ void app_main(void)
 #if CONFIG_APP_CLAW_CAP_IM_LOCAL
     ESP_ERROR_CHECK(http_server_webim_bind_im());
 #endif
+
+    /* Confirm local startup before waiting for Wi-Fi. An offline or unpaired
+     * device is healthy; incomplete filesystem recovery is not. */
+    if (recovery_err == ESP_OK) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(app_recovery_mark_healthy());
+    }
 
 #if CONFIG_APP_CLAW_MOSAIC_GSP_ENABLE
     if (wifi_err == ESP_OK && s_config->wifi_ssid[0] != '\0') {

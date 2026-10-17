@@ -30,16 +30,8 @@ BOLD = DEJAVU_SANS_BOLD
 ASSETS = "../../../common/assets"
 CAMERA_ASSETS = "."
 
-# esp_gsp Canvas placeholders (camera preview and album thumbnail) must own an
-# exclusive runtime resource view, so they must NOT be referenced by the hidden
-# static seed element (shared_prefix).  Each is still registered by its own bind
-# element.  They are listed last, in bind-encounter order, in the shared
-# resource scene so that scene 0 and the resource bundle assign every image the
-# same resource id.
-CANVAS_IMAGE = (f"{CAMERA_ASSETS}/camera_canvas_fullscreen.png", 480, 480)
-THUMBNAIL_IMAGE = (f"{ASSETS}/black_placeholder.png", 48, 48)
-
-SEED_IMAGES = [
+IMAGES = [
+    (f"{CAMERA_ASSETS}/camera_canvas_fullscreen.png", 480, 480),
     (f"{CAMERA_ASSETS}/camera_album.png", 48, 48),
     (f"{CAMERA_ASSETS}/camera_shutter.png", 60, 60),
     (f"{CAMERA_ASSETS}/camera_flip.png", 48, 48),
@@ -47,9 +39,8 @@ SEED_IMAGES = [
     (f"{CAMERA_ASSETS}/camera_flash_off.png", 48, 48),
     (f"{CAMERA_ASSETS}/camera_flash_on.png", 48, 48),
     (f"{CAMERA_ASSETS}/camera_recognition.png", 48, 48),
+    (f"{ASSETS}/black_placeholder.png", 48, 48),
 ]
-
-ASSET_IMAGES = [*SEED_IMAGES, CANVAS_IMAGE, THUMBNAIL_IMAGE]
 FONT_POLICIES = {
     16: shared_charset(),
     18: shared_charset(),
@@ -59,12 +50,15 @@ FONT_POLICIES = {
 
 
 def main():
-    objs, content = shared_prefix(SEED_IMAGES, FONT_POLICIES, BOLD)
+    # Dynamic canvases must not share resource views with hidden seed images.
+    canvas_images = {f"{CAMERA_ASSETS}/camera_canvas_fullscreen.png", f"{ASSETS}/black_placeholder.png"}
+    seed_images = [image for image in IMAGES if image[0] not in canvas_images]
+    objs, content = shared_prefix(seed_images, FONT_POLICIES, BOLD)
     page = len(objs)
     objs.append(layer(content, 0, 0, CONTENT_W, CONTENT_H, name="camera_root"))
     build_camera_page(objs, page, ASSETS, CAMERA_ASSETS)
     write_scene(scene_out_path(HERE, "camera_480.json"), "camera", objs, font=FONT)
-    asset_scene(scene_out_path(HERE, "camera_assets_480.json"), "camera_assets", ASSET_IMAGES,
+    asset_scene(scene_out_path(HERE, "camera_assets_480.json"), "camera_assets", IMAGES,
                 FONT_POLICIES, BOLD, FONT)
 
 

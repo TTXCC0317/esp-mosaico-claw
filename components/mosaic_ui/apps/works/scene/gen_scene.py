@@ -17,7 +17,6 @@ from scene_common import (  # noqa: E402
     CONTENT_H,
     CONTENT_W,
     app_root_shell,
-    asset_scene,
     auto_charset,
     button,
     container,
@@ -37,7 +36,8 @@ ROW_COUNT = 4
 STATE_CHARSET = ASCII_PRINTABLE
 META_CHARSET = ASCII_PRINTABLE + "·"
 
-IMAGES: list[tuple[str, int, int]] = []
+PLACEHOLDER = "../../../common/assets/black_placeholder.png"
+IMAGES = [(PLACEHOLDER, 48, 48)]
 FONT_POLICIES = {
     14: auto_charset(),
     15: explicit_charset(META_CHARSET),
@@ -61,22 +61,22 @@ def call_event(name: str, arg: int = 0) -> list[dict]:
 def tab_button(objs, parent, x, width, text, index):
     events = call_event("works_select_tab", index)
     objs.append(button(
-        parent, x, 70, width, 40, text,
-        radius=20, size=17, name=f"works_tab_{index}",
+        parent, x, 65, width, 50, text,
+        radius=25, size=22, name=f"works_tab_{index}",
         bg="#000000", fg="#D6D6DE", border="#3B3C3D", border_w=1,
         events=events,
     ))
 
     selected = len(objs)
     objs.append(layer(
-        parent, x, 70, width, 40, hidden=True,
+        parent, x, 65, width, 50, hidden=True,
         bind=f"works_tab_{index}_selected",
         bind_target="visible",
         name=f"works_tab_{index}_selected",
     ))
     objs.append(button(
-        selected, 0, 0, width, 40, text,
-        radius=20, size=17, bg="#FCFCFF", fg="#000000",
+        selected, 0, 0, width, 50, text,
+        radius=25, size=22, bg="#FCFCFF", fg="#000000",
         events=events,
     ))
 
@@ -89,7 +89,7 @@ def status_layer(objs, parent, row_index, name, text, color):
         bind_target="visible",
         name=f"works_row_{row_index}_{name}",
     ))
-    objs.append(container(state, 16, 22, 8, 8, bg=color, radius=4))
+    objs.append(container(state, 320, 30, 8, 8, bg=color, radius=4))
     state_label = label(
         state, 320, 20, 140, 28, text, size=17, color=color,
         align="right",
@@ -115,15 +115,29 @@ def works_row(objs, parent, row_index):
         events=events,
     ))
 
+    # Keep the default tile underneath the asynchronous image layer.
+    objs.append(container(row, 16, 8, 48, 48, bg="#242424", radius=10))
+    objs.append(label(row, 16, 23, 48, 20, "APP", size=14, color="#91919B", align="center"))
+    icon = len(objs)
+    objs.append(layer(row, 16, 8, 48, 48, hidden=True,
+                      name=f"works_row_{row_index}_icon_layer",
+                      bind=f"works_row_{row_index}_icon_visible", bind_target="visible"))
+    objs.append({
+        "type": "image", "parent": icon, "x": 0, "y": 0, "w": 48, "h": 48,
+        "image": PLACEHOLDER, "codec": "raw", "fit": "contain", "dynamic_image": True,
+        "name": f"works_row_{row_index}_icon", "bind": f"works_row_{row_index}_icon",
+        "events": events,
+    })
+
     title = label(
-        row, 38, 8, 270, 28, "", size=22, color="#FCFCFF",
+        row, 76, 8, 232, 28, "", size=22, color="#FCFCFF",
         bind=f"works_row_{row_index}_name",
         font_charset=ASCII_PRINTABLE,
     )
     title["overflow"] = "ellipsis"
     objs.append(title)
     meta = label(
-        row, 38, 36, 270, 20, "", size=15, color="#595959",
+        row, 76, 36, 232, 20, "", size=15, color="#595959",
         bind=f"works_row_{row_index}_meta",
         font_charset=META_CHARSET,
     )
@@ -139,22 +153,22 @@ def works_row(objs, parent, row_index):
 def build_pager(objs, parent):
     pager = len(objs)
     objs.append(layer(
-        parent, 0, 416, CONTENT_W, 38, hidden=True,
+        parent, 0, 408, CONTENT_W, 52, hidden=True,
         bind="works_pager_visible", bind_target="visible",
         name="works_pager",
     ))
     objs.append(button(
-        pager, 138, 2, 56, 34, "‹", bg="#181819", fg="#D6D6DE",
-        radius=17, size=24, events=call_event("works_page_prev"),
+        pager, 124, 5, 70, 43, "‹", bg="#181819", fg="#D6D6DE",
+        radius=22, size=31, events=call_event("works_page_prev"),
     ))
     objs.append(label(
-        pager, 198, 7, 84, 24, "1 / 1", size=14, color="#91919B",
+        pager, 198, 14, 84, 24, "1 / 1", size=14, color="#91919B",
         align="center", bind="works_page_text",
         font_charset=ASCII_PRINTABLE,
     ))
     objs.append(button(
-        pager, 286, 2, 56, 34, "›", bg="#181819", fg="#D6D6DE",
-        radius=17, size=24, events=call_event("works_page_next"),
+        pager, 286, 5, 70, 43, "›", bg="#181819", fg="#D6D6DE",
+        radius=22, size=31, events=call_event("works_page_next"),
     ))
 
 
@@ -172,8 +186,8 @@ def build_works_ui(objs, content):
         font_charset=ASCII_PRINTABLE,
     ))
 
-    tab_button(objs, root, 16, 78, TABS[0], 0)
-    tab_button(objs, root, 102, 96, TABS[1], 1)
+    tab_button(objs, root, 16, 98, TABS[0], 0)
+    tab_button(objs, root, 122, 121, TABS[1], 1)
     for row_index in range(ROW_COUNT):
         works_row(objs, root, row_index)
     build_pager(objs, root)
@@ -184,8 +198,6 @@ def main():
     build_works_ui(objs, content)
     write_scene(scene_out_path(HERE, "works_480.json"), "works", objs,
                 font=FONT)
-    asset_scene(scene_out_path(HERE, "works_assets_480.json"),
-                "works_assets", IMAGES, FONT_POLICIES, BOLD, FONT)
 
 
 if __name__ == "__main__":

@@ -63,6 +63,11 @@ static void works_clear_rows(esp_gsp_handle_t ui)
 #include "mosaic_loader.h"
 #include "works_runtime.h"
 
+#include <stdatomic.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
 typedef enum {
     WORKS_TAB_RECENT = 0,
     WORKS_TAB_INSTALLED,
@@ -94,8 +99,119 @@ static const gsp_component_key_t s_row_visibility_keys[WORKS_ROW_COUNT][4] = {
 };
 
 static const char *TAG = "works_app";
-static works_tab_t s_selected_tab;
+static works_tab_t s_selected_tab = WORKS_TAB_INSTALLED;
 static size_t s_installed_page;
+
+#define WORKS_ICON_FILE_MAX (256U * 1024U)
+
+static const uint16_t s_row_icon_binds[WORKS_ROW_COUNT] = {
+    GSP_BIND_WORKS_ROW_0_ICON, GSP_BIND_WORKS_ROW_1_ICON, GSP_BIND_WORKS_ROW_2_ICON, GSP_BIND_WORKS_ROW_3_ICON,
+};
+static const uint16_t s_row_icon_visible_binds[WORKS_ROW_COUNT] = {
+    GSP_BIND_WORKS_ROW_0_ICON_VISIBLE, GSP_BIND_WORKS_ROW_1_ICON_VISIBLE,
+    GSP_BIND_WORKS_ROW_2_ICON_VISIBLE, GSP_BIND_WORKS_ROW_3_ICON_VISIBLE,
+};
+
+typedef struct {
+    char app_id[WORKS_RUNTIME_APP_ID_MAX];
+    char path[WORKS_RUNTIME_ICON_PATH_MAX];
+    uint32_t revision;
+    atomic_uint state;
+} works_icon_t;
+
+typedef struct {
+    size_t row;
+    unsigned token;
+} works_icon_request_t;
+
+static works_icon_t s_icons[WORKS_ROW_COUNT];
+
+static void works_reset_icon(size_t row)
+{
+    works_icon_t *icon = &s_icons[row];
+    /* Low bits hold completion status; upper bits identify the request. */
+    unsigned state = atomic_load(&icon->state);
+    atomic_store(&icon->state, (state + 4U) & ~3U);
+    icon->app_id[0] = '\0';
+    icon->path[0] = '\0';
+}
+
+static void works_icon_complete(esp_gsp_handle_t ui, uint16_t bind, gsp_err_t status, void *ctx)
+{
+    (void)ui;
+    (void)bind;
+    works_icon_request_t *request = ctx;
+    unsigned expected = request->token;
+    unsigned result = request->token | (status == GSP_OK ? 1U : 2U);
+    bool current = atomic_compare_exchange_strong(&s_icons[request->row].state, &expected, result);
+    if (current && status != GSP_OK && status != GSP_ERR_CANCELLED) {
+        ESP_LOGW(TAG, "decode work icon row %u failed: %d", (unsigned)request->row, status);
+    }
+    free(request);
+}
+
+static esp_err_t works_load_icon(esp_gsp_handle_t ui, size_t row, const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (st.st_size <= 0 || st.st_size > WORKS_ICON_FILE_MAX) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return ESP_FAIL;
+    }
+    uint8_t *data = malloc((size_t)st.st_size);
+    works_icon_request_t *request = malloc(sizeof(*request));
+    if (!data || !request) {
+        free(data);
+        free(request);
+        fclose(file);
+        return ESP_ERR_NO_MEM;
+    }
+    size_t size = fread(data, 1, (size_t)st.st_size, file);
+    bool valid = size == (size_t)st.st_size && !ferror(file);
+    fclose(file);
+    if (!valid) {
+        free(data);
+        free(request);
+        return ESP_FAIL;
+    }
+    *request = (works_icon_request_t){.row = row, .token = atomic_load(&s_icons[row].state)};
+    const esp_gsp_image_options_t options = {
+        .ownership = ESP_GSP_IMAGE_TAKE,
+        .on_complete = works_icon_complete,
+        .complete_ctx = request,
+    };
+    esp_gsp_err_t err = esp_gsp_set_image_ex(ui, s_row_icon_binds[row], data, size, &options);
+    if (err != ESP_GSP_OK) {
+        free(data);
+        free(request);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+static void works_render_icon(esp_gsp_handle_t ui, size_t row, const works_runtime_item_snapshot_t *item)
+{
+    works_icon_t *icon = &s_icons[row];
+    if (strcmp(icon->app_id, item->app_id) != 0 || strcmp(icon->path, item->icon_path) != 0 || icon->revision != item->icon_revision) {
+        works_reset_icon(row);
+        (void)esp_gsp_set_visible(ui, s_row_icon_visible_binds[row], false);
+        strlcpy(icon->app_id, item->app_id, sizeof(icon->app_id));
+        strlcpy(icon->path, item->icon_path, sizeof(icon->path));
+        icon->revision = item->icon_revision;
+        if (icon->path[0]) {
+            esp_err_t err = works_load_icon(ui, row, icon->path);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "load work icon failed: app=%s err=%s", icon->app_id, esp_err_to_name(err));
+            }
+        }
+    }
+    (void)esp_gsp_set_visible(ui, s_row_icon_visible_binds[row], (atomic_load(&icon->state) & 3U) == 1U);
+}
 
 static esp_err_t works_first_error(esp_err_t current, esp_err_t next)
 {
@@ -194,12 +310,14 @@ static void works_render(esp_gsp_handle_t ui)
         works_runtime_item_snapshot_t item;
         bool visible = works_item_for_row(row, &item) == ESP_OK;
         if (!visible) {
+            works_reset_icon(row);
             esp_err_t err = works_set_row_visibility(ui, row, false, false, false, false);
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "hide work row %u failed: %s", (unsigned)row, esp_err_to_name(err));
             }
             continue;
         }
+        works_render_icon(ui, row, &item);
         bool active = works_state_is_active(item.state);
         esp_err_t err = esp_gsp_set_text(ui, s_row_name_binds[row], item.display_name);
         err = works_first_error(err, esp_gsp_set_text(ui, s_row_meta_binds[row], item.builtin ? TR("Lua · System", "Lua · 系统") : TR("Lua · Local", "Lua · 本地")));
@@ -268,6 +386,9 @@ static void works_event(
     }
     switch (event->type) {
     case MOSAIC_EVENT_START: {
+        for (size_t row = 0; row < WORKS_ROW_COUNT; ++row) {
+            works_reset_icon(row);
+        }
         works_runtime_config_t config = {
             .on_changed = works_runtime_changed,
         };
@@ -286,13 +407,22 @@ static void works_event(
         break;
     case MOSAIC_EVENT_TIMER:
         (void)works_runtime_refresh();
+        works_render(ui);
         (void)works_runtime_flush();
         break;
-    case MOSAIC_EVENT_MODEL_CHANGED:
     case MOSAIC_EVENT_SCENE_CHANGED:
+        for (size_t row = 0; row < WORKS_ROW_COUNT; ++row) {
+            works_reset_icon(row);
+        }
+        works_render(ui);
+        break;
+    case MOSAIC_EVENT_MODEL_CHANGED:
         works_render(ui);
         break;
     case MOSAIC_EVENT_STOP:
+        for (size_t row = 0; row < WORKS_ROW_COUNT; ++row) {
+            works_reset_icon(row);
+        }
         (void)works_runtime_flush();
         break;
     case MOSAIC_EVENT_POINTER:
@@ -309,8 +439,8 @@ static void works_event(
     const mosaic_event_t *event = raw_event;
     if (event && event->type == MOSAIC_EVENT_START) {
         (void)esp_gsp_set_text(ui, GSP_BIND_WORKS_COUNT, TR("0 ITEMS", "0 项"));
-        (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_0_SELECTED, true);
-        (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_1_SELECTED, false);
+        (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_0_SELECTED, false);
+        (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_1_SELECTED, true);
         (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_PAGER_VISIBLE, false);
         works_clear_rows(ui);
     }

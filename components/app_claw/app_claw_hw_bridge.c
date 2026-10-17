@@ -5,720 +5,331 @@
  */
 #include "app_claw_hw_bridge.h"
 
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-
-#include "esp_err.h"
-#include "esp_log.h"
-
+#include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "esp_board_manager.h"
-#include "esp_board_manager_defs.h"
-#include "esp_board_manager_includes.h"
-
-static const char *TAG = "app_claw_hw_bridge";
-
-/* type=custom devices have a per-YAML-generated struct layout that the
- * bridge cannot introspect, so it just logs and skips. */
-#define BRIDGE_TYPE_CUSTOM      "custom"
-#define BRIDGE_OWNER_TAG_MAX    96
-#define BRIDGE_KEY_BUF          64
-
-static inline bool bridge_gpio_valid(int pin)
-{
-    return pin >= 0 && pin < 256;
-}
-
-static inline bool bridge_i2c_addr8_valid(int addr8)
-{
-    /* esp_board_manager stores 8-bit left-shifted addresses. */
-    return addr8 > 0 && addr8 <= 0xFF;
-}
-
-/* Leases held for the app's full lifetime so board-owned resources stay
- * blocked from raw Lua drivers. */
-typedef struct bridge_lease_node {
-    claw_hw_lease_handle_t   lease;
-    struct bridge_lease_node *next;
-} bridge_lease_node_t;
-
-static bridge_lease_node_t *s_lease_list;
-static bool                 s_bridge_registered;
-static SemaphoreHandle_t    s_bridge_mutex;
-static portMUX_TYPE         s_bridge_init_spinlock = portMUX_INITIALIZER_UNLOCKED;
-
-static esp_err_t bridge_ensure_mutex(void)
-{
-    portENTER_CRITICAL(&s_bridge_init_spinlock);
-    bool have = (s_bridge_mutex != NULL);
-    portEXIT_CRITICAL(&s_bridge_init_spinlock);
-    if (have) {
-        return ESP_OK;
-    }
-    SemaphoreHandle_t m = xSemaphoreCreateMutex();
-    if (m == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-    portENTER_CRITICAL(&s_bridge_init_spinlock);
-    if (s_bridge_mutex == NULL) {
-        s_bridge_mutex = m;
-        m = NULL;
-    }
-    portEXIT_CRITICAL(&s_bridge_init_spinlock);
-    if (m != NULL) {
-        vSemaphoreDelete(m);
-    }
-    return ESP_OK;
-}
-
-static void bridge_lock(void)
-{
-    xSemaphoreTake(s_bridge_mutex, portMAX_DELAY);
-}
-
-static void bridge_unlock(void)
-{
-    xSemaphoreGive(s_bridge_mutex);
-}
-
-static void bridge_record_lease(claw_hw_lease_handle_t lease)
-{
-    if (lease == NULL) {
-        return;
-    }
-    bridge_lease_node_t *node = calloc(1, sizeof(*node));
-    if (node == NULL) {
-        /* Registry still tracks the row; we just cannot walk it locally. */
-        ESP_LOGW(TAG, "OOM recording bridge lease; entry still active in registry");
-        return;
-    }
-    node->lease = lease;
-    bridge_lock();
-    node->next = s_lease_list;
-    s_lease_list = node;
-    bridge_unlock();
-}
-
-/* Peripheral introspection: each helper returns false when the named
- * peripheral cannot be resolved so callers can skip with a DEBUG log. */
-
-#ifdef CONFIG_ESP_BOARD_PERIPH_I2C_SUPPORT
-static bool bridge_periph_i2c_port(const char *name, int *out_port)
-{
-    if (name == NULL || out_port == NULL) {
-        return false;
-    }
-    void *cfg = NULL;
-    if (esp_board_manager_get_periph_config(name, &cfg) != ESP_OK || cfg == NULL) {
-        return false;
-    }
-    const i2c_master_bus_config_t *bus = cfg;
-    *out_port = (int)bus->i2c_port;
-    return true;
-}
-#endif
-
-#ifdef CONFIG_ESP_BOARD_PERIPH_SPI_SUPPORT
-static bool bridge_periph_spi_host(const char *name, int *out_host)
-{
-    if (name == NULL || out_host == NULL) {
-        return false;
-    }
-    void *cfg = NULL;
-    if (esp_board_manager_get_periph_config(name, &cfg) != ESP_OK || cfg == NULL) {
-        return false;
-    }
-    const periph_spi_config_t *spi = cfg;
-    *out_host = (int)spi->spi_port;
-    return true;
-}
-#endif
-
-#ifdef CONFIG_ESP_BOARD_PERIPH_I2S_SUPPORT
-static bool bridge_periph_i2s_port_dir(const char *name, int *out_port, bool *out_tx, bool *out_rx)
-{
-    if (name == NULL || out_port == NULL || out_tx == NULL || out_rx == NULL) {
-        return false;
-    }
-    void *cfg = NULL;
-    if (esp_board_manager_get_periph_config(name, &cfg) != ESP_OK || cfg == NULL) {
-        return false;
-    }
-    const periph_i2s_config_t *i2s = cfg;
-    *out_port = i2s->port;
-    *out_tx = (i2s->direction & I2S_DIR_TX) != 0;
-    *out_rx = (i2s->direction & I2S_DIR_RX) != 0;
-    return true;
-}
-#endif
-
-#ifdef CONFIG_ESP_BOARD_PERIPH_GPIO_SUPPORT
-static bool bridge_periph_gpio_mask(const char *name, uint64_t *out_mask)
-{
-    if (name == NULL || out_mask == NULL) {
-        return false;
-    }
-    void *cfg = NULL;
-    if (esp_board_manager_get_periph_config(name, &cfg) != ESP_OK || cfg == NULL) {
-        return false;
-    }
-    const periph_gpio_config_t *gpio = cfg;
-    *out_mask = gpio->gpio_config.pin_bit_mask;
-    return true;
-}
-#endif
-
-#if defined(CONFIG_ESP_BOARD_PERIPH_LEDC_SUPPORT) && defined(CONFIG_ESP_BOARD_DEV_LEDC_CTRL_SUPPORT)
-static bool bridge_periph_ledc_gpio(const char *name, int *out_pin)
-{
-    if (name == NULL || out_pin == NULL) {
-        return false;
-    }
-    void *cfg = NULL;
-    if (esp_board_manager_get_periph_config(name, &cfg) != ESP_OK || cfg == NULL) {
-        return false;
-    }
-    const periph_ledc_config_t *ledc = cfg;
-    *out_pin = ledc->gpio_num;
-    return true;
-}
-#endif
-
-static void bridge_claim_resource(const char *device_name,
-                                  const char *owner_tag,
-                                  const char *resource,
-                                  claw_hw_mode_t mode,
-                                  size_t *registered_count)
-{
-    if (resource == NULL || resource[0] == '\0') {
-        return;
-    }
-
-    /* Sibling board devices legitimately share physical wires (a duplex
-     * codec exposes both audio_dac and audio_adc on the same I2C address);
-     * skip silently instead of tripping a registry WARN. */
-    const char *existing_holder = NULL;
-    if (claw_hw_query(resource, &existing_holder) == ESP_OK &&
-        existing_holder != NULL &&
-        strncmp(existing_holder, "board/", 6) == 0) {
-        ESP_LOGD(TAG, "device %s: %s already registered by sibling %s; skipping",
-                 device_name != NULL ? device_name : "?",
-                 resource, existing_holder);
-        return;
-    }
-
-    claw_hw_claim_config_t claim = {
-        .resource      = resource,
-        .owner_tag     = owner_tag,
-        .mode          = mode,
-        .on_release    = NULL,
-        .user_ctx      = NULL,
-        .sub_resources = NULL,
-    };
-    claw_hw_lease_handle_t lease = NULL;
-    esp_err_t err = claw_hw_claim(&claim, &lease);
-    if (err == ESP_OK) {
-        bridge_record_lease(lease);
-        if (registered_count != NULL) {
-            (*registered_count)++;
-        }
-        ESP_LOGD(TAG, "registered %s as %s (%s)",
-                 resource, owner_tag,
-                 mode == CLAW_HW_MODE_EXCLUSIVE ? "EXCLUSIVE" : "SHARED_READ");
-        return;
-    }
-    if (err == ESP_ERR_INVALID_STATE) {
-        const char *holder = NULL;
-        (void)claw_hw_query(resource, &holder);
-        ESP_LOGW(TAG, "device %s: failed to register %s (%s) — held by %s",
-                 device_name != NULL ? device_name : "?",
-                 resource,
-                 mode == CLAW_HW_MODE_EXCLUSIVE ? "EXCLUSIVE" : "SHARED_READ",
-                 holder != NULL ? holder : "?");
-        return;
-    }
-    ESP_LOGW(TAG, "device %s: failed to register %s: %s",
-             device_name != NULL ? device_name : "?",
-             resource, esp_err_to_name(err));
-}
-
-static void bridge_claim_gpio(const char *device_name,
-                              const char *owner_tag,
-                              int pin,
-                              size_t *registered_count)
-{
-    if (!bridge_gpio_valid(pin)) {
-        return;
-    }
-    char buf[BRIDGE_KEY_BUF];
-    bridge_claim_resource(device_name, owner_tag,
-                          claw_hw_key_gpio(buf, sizeof(buf), pin),
-                          CLAW_HW_MODE_EXCLUSIVE,
-                          registered_count);
-}
-
-#if defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT) || defined(CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT)
-static void bridge_claim_i2c(const char *device_name,
-                             const char *owner_tag,
-                             int port, uint8_t addr7,
-                             size_t *registered_count)
-{
-    char buf[BRIDGE_KEY_BUF];
-    bridge_claim_resource(device_name, owner_tag,
-                          claw_hw_key_i2c(buf, sizeof(buf), port, addr7),
-                          CLAW_HW_MODE_EXCLUSIVE,
-                          registered_count);
-}
-#endif
-
-static void bridge_claim_spi_cs(const char *device_name,
-                                const char *owner_tag,
-                                int host, int cs_pin,
-                                size_t *registered_count)
-{
-    if (!bridge_gpio_valid(cs_pin)) {
-        return;
-    }
-    char buf[BRIDGE_KEY_BUF];
-    bridge_claim_resource(device_name, owner_tag,
-                          claw_hw_key_spi(buf, sizeof(buf), host, cs_pin),
-                          CLAW_HW_MODE_EXCLUSIVE,
-                          registered_count);
-}
-
-#if defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT) && defined(CONFIG_ESP_BOARD_PERIPH_I2S_SUPPORT)
-static void bridge_claim_i2s(const char *device_name,
-                             const char *owner_tag,
-                             int port, bool tx,
-                             size_t *registered_count)
-{
-    char buf[BRIDGE_KEY_BUF];
-    bridge_claim_resource(device_name, owner_tag,
-                          claw_hw_key_i2s(buf, sizeof(buf), port, tx),
-                          CLAW_HW_MODE_EXCLUSIVE,
-                          registered_count);
-}
-#endif
-
-#ifdef CONFIG_ESP_BOARD_PERIPH_GPIO_SUPPORT
-/* Shared by power_ctrl / gpio_ctrl / button-gpio extractors. */
-static size_t bridge_claim_gpio_periph(const char *device_name,
-                                       const char *owner_tag,
-                                       const char *gpio_periph_name)
-{
-    size_t registered = 0;
-    if (gpio_periph_name == NULL || gpio_periph_name[0] == '\0') {
-        ESP_LOGD(TAG, "%s: missing gpio peripheral name",
-                 device_name != NULL ? device_name : "?");
-        return 0;
-    }
-    uint64_t mask = 0;
-    if (!bridge_periph_gpio_mask(gpio_periph_name, &mask)) {
-        ESP_LOGD(TAG, "%s: unresolved gpio peripheral '%s'",
-                 device_name != NULL ? device_name : "?", gpio_periph_name);
-        return 0;
-    }
-    for (int pin = 0; mask != 0 && pin < 64; ++pin) {
-        if ((mask >> pin) & 0x1ULL) {
-            bridge_claim_gpio(device_name, owner_tag, pin, &registered);
-        }
-    }
-    return registered;
-}
-#endif
-
-/* Per-device-type extractors return the number of resources registered so
- * the caller can flag zero-yield devices. */
-
-#ifdef CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT
-static size_t bridge_extract_display_lcd(const char *name, const char *owner_tag)
-{
-    size_t registered = 0;
-    void *raw_cfg = NULL;
-    if (esp_board_manager_get_device_config(name, &raw_cfg) != ESP_OK || raw_cfg == NULL) {
-        ESP_LOGW(TAG, "display_lcd %s: config unavailable", name);
-        return 0;
-    }
-    const dev_display_lcd_config_t *cfg = raw_cfg;
-    const char *sub_type = cfg->sub_type != NULL ? cfg->sub_type : "";
-
-#ifdef CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUB_SPI_SUPPORT
-    if (strcmp(sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_SPI) == 0) {
-        const dev_display_lcd_spi_sub_config_t *spi = &cfg->sub_cfg.spi;
-        int host = -1;
-        if (bridge_periph_spi_host(spi->spi_name, &host)) {
-            bridge_claim_spi_cs(name, owner_tag, host, spi->io_spi_config.cs_gpio_num, &registered);
-        } else {
-            ESP_LOGD(TAG, "display_lcd %s: unresolved spi peripheral '%s'; skipping cs",
-                     name, spi->spi_name != NULL ? spi->spi_name : "?");
-        }
-        bridge_claim_gpio(name, owner_tag, spi->io_spi_config.dc_gpio_num, &registered);
-        bridge_claim_gpio(name, owner_tag, spi->panel_config.reset_gpio_num, &registered);
-        return registered;
-    }
-#endif
-
-    /* DSI/RGB/PARLIO/I80 sub-types are not extracted yet; their shared-pin
-     * surface is generally handled by the underlying bus driver. */
-    ESP_LOGD(TAG, "display_lcd %s: sub_type '%s' not extracted", name, sub_type);
-    return registered;
-}
-#endif
-
-#ifdef CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUPPORT
-static size_t bridge_extract_lcd_touch(const char *name, const char *owner_tag)
-{
-    size_t registered = 0;
-    void *raw_cfg = NULL;
-    if (esp_board_manager_get_device_config(name, &raw_cfg) != ESP_OK || raw_cfg == NULL) {
-        ESP_LOGW(TAG, "lcd_touch %s: config unavailable", name);
-        return 0;
-    }
-    const dev_lcd_touch_config_t *cfg = raw_cfg;
-    const char *sub_type = cfg->sub_type != NULL ? cfg->sub_type : "";
-
-    bridge_claim_gpio(name, owner_tag, cfg->touch_config.int_gpio_num, &registered);
-    bridge_claim_gpio(name, owner_tag, cfg->touch_config.rst_gpio_num, &registered);
-
-#ifdef CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT
-    if (strcmp(sub_type, ESP_BOARD_DEVICE_LCD_TOUCH_SUB_TYPE_I2C) == 0) {
-        const dev_lcd_touch_i2c_sub_config_t *i2c = &cfg->sub_cfg.i2c;
-        int port = -1;
-        if (!bridge_periph_i2c_port(i2c->i2c_name, &port)) {
-            ESP_LOGD(TAG, "lcd_touch %s: unresolved i2c peripheral '%s'; skipping addr",
-                     name, i2c->i2c_name != NULL ? i2c->i2c_name : "?");
-            return registered;
-        }
-        for (size_t i = 0; i < i2c->i2c_addr_count && i < DEV_LCD_TOUCH_I2C_MAX_ADDR_COUNT; ++i) {
-            int addr8 = i2c->i2c_addr[i];
-            if (!bridge_i2c_addr8_valid(addr8)) {
-                continue;
-            }
-            /* 8-bit board_manager address -> 7-bit registry key. */
-            bridge_claim_i2c(name, owner_tag, port, (uint8_t)((addr8 >> 1) & 0x7F), &registered);
-        }
-        return registered;
-    }
-#endif
-
-    ESP_LOGD(TAG, "lcd_touch %s: sub_type '%s' not extracted", name, sub_type);
-    return registered;
-}
-#endif
-
-#ifdef CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT
-static size_t bridge_extract_audio_codec(const char *name, const char *owner_tag)
-{
-    size_t registered = 0;
-    void *raw_cfg = NULL;
-    if (esp_board_manager_get_device_config(name, &raw_cfg) != ESP_OK || raw_cfg == NULL) {
-        ESP_LOGW(TAG, "audio_codec %s: config unavailable", name);
-        return 0;
-    }
-    const dev_audio_codec_config_t *cfg = raw_cfg;
-
-    /* Direction comes from the I2S peripheral itself: a duplex codec may
-     * expose both DAC and ADC, so adc_enabled/dac_enabled alone is not
-     * enough. */
-#ifdef CONFIG_ESP_BOARD_PERIPH_I2S_SUPPORT
-    if (cfg->i2s_cfg.name != NULL && cfg->i2s_cfg.name[0] != '\0') {
-        int port = -1;
-        bool tx = false, rx = false;
-        if (bridge_periph_i2s_port_dir(cfg->i2s_cfg.name, &port, &tx, &rx)) {
-            if (tx) {
-                bridge_claim_i2s(name, owner_tag, port, true, &registered);
-            }
-            if (rx) {
-                bridge_claim_i2s(name, owner_tag, port, false, &registered);
-            }
-            if (!tx && !rx) {
-                ESP_LOGD(TAG, "audio_codec %s: i2s '%s' has no direction flag",
-                         name, cfg->i2s_cfg.name);
-            }
-        } else {
-            ESP_LOGD(TAG, "audio_codec %s: unresolved i2s peripheral '%s'",
-                     name, cfg->i2s_cfg.name);
-        }
-    }
-#endif
-
-    if (bridge_i2c_addr8_valid(cfg->i2c_cfg.address)) {
-        int port = cfg->i2c_cfg.port;
-#ifdef CONFIG_ESP_BOARD_PERIPH_I2C_SUPPORT
-        int resolved = -1;
-        if (bridge_periph_i2c_port(cfg->i2c_cfg.name, &resolved)) {
-            port = resolved;
-        }
-#endif
-        bridge_claim_i2c(name, owner_tag, port,
-                         (uint8_t)((cfg->i2c_cfg.address >> 1) & 0x7F), &registered);
-    }
-
-    bridge_claim_gpio(name, owner_tag, cfg->pa_cfg.port, &registered);
-
-    return registered;
-}
-#endif
-
-#ifdef CONFIG_ESP_BOARD_DEV_POWER_CTRL_SUPPORT
-static size_t bridge_extract_power_ctrl(const char *name, const char *owner_tag)
-{
-    size_t registered = 0;
-    void *raw_cfg = NULL;
-    if (esp_board_manager_get_device_config(name, &raw_cfg) != ESP_OK || raw_cfg == NULL) {
-        ESP_LOGW(TAG, "power_ctrl %s: config unavailable", name);
-        return 0;
-    }
-    const dev_power_ctrl_config_t *cfg = raw_cfg;
-    const char *sub_type = cfg->sub_type != NULL ? cfg->sub_type : "";
-
-#ifdef CONFIG_ESP_BOARD_PERIPH_GPIO_SUPPORT
-    if (strcmp(sub_type, "gpio") == 0) {
-        registered += bridge_claim_gpio_periph(name, owner_tag,
-                                               cfg->sub_cfg.gpio.gpio_name);
-        return registered;
-    }
-#endif
-
-    ESP_LOGD(TAG, "power_ctrl %s: sub_type '%s' not extracted", name, sub_type);
-    return registered;
-}
-#endif
-
-#ifdef CONFIG_ESP_BOARD_DEV_GPIO_CTRL_SUPPORT
-static size_t bridge_extract_gpio_ctrl(const char *name, const char *owner_tag)
-{
-    void *raw_cfg = NULL;
-    if (esp_board_manager_get_device_config(name, &raw_cfg) != ESP_OK || raw_cfg == NULL) {
-        ESP_LOGW(TAG, "gpio_ctrl %s: config unavailable", name);
-        return 0;
-    }
-#ifdef CONFIG_ESP_BOARD_PERIPH_GPIO_SUPPORT
-    const dev_gpio_ctrl_config_t *cfg = raw_cfg;
-    return bridge_claim_gpio_periph(name, owner_tag, cfg->gpio_name);
+#include "esp_log.h"
+#include "hal/spi_types.h"
+#include "sdkconfig.h"
+#include "soc/soc_caps.h"
+#if SOC_SDMMC_HOST_SUPPORTED && !SOC_SDMMC_USE_GPIO_MATRIX
+#if __has_include("hal/sdmmc_periph.h")
+#include "hal/sdmmc_periph.h"
 #else
-    (void)owner_tag;
-    ESP_LOGD(TAG, "gpio_ctrl %s: gpio peripheral support disabled", name);
-    return 0;
+#include "soc/sdmmc_periph.h"
 #endif
-}
 #endif
-
-#ifdef CONFIG_ESP_BOARD_DEV_LEDC_CTRL_SUPPORT
-static size_t bridge_extract_ledc_ctrl(const char *name, const char *owner_tag)
-{
-    size_t registered = 0;
-    void *raw_cfg = NULL;
-    if (esp_board_manager_get_device_config(name, &raw_cfg) != ESP_OK || raw_cfg == NULL) {
-        ESP_LOGW(TAG, "ledc_ctrl %s: config unavailable", name);
-        return 0;
-    }
-#ifdef CONFIG_ESP_BOARD_PERIPH_LEDC_SUPPORT
-    const dev_ledc_ctrl_config_t *cfg = raw_cfg;
-    int pin = -1;
-    if (bridge_periph_ledc_gpio(cfg->ledc_name, &pin)) {
-        bridge_claim_gpio(name, owner_tag, pin, &registered);
-    } else {
-        ESP_LOGD(TAG, "ledc_ctrl %s: unresolved ledc peripheral '%s'",
-                 name, cfg->ledc_name != NULL ? cfg->ledc_name : "?");
-    }
+#if SOC_ADC_SUPPORTED
+#if __has_include("hal/adc_periph.h")
+#include "hal/adc_periph.h"
 #else
-    (void)owner_tag;
-    ESP_LOGD(TAG, "ledc_ctrl %s: ledc peripheral support disabled", name);
+#include "soc/adc_periph.h"
 #endif
-    return registered;
-}
 #endif
-
-#ifdef CONFIG_ESP_BOARD_DEV_BUTTON_SUPPORT
-static size_t bridge_extract_button(const char *name, const char *owner_tag)
-{
-    void *raw_cfg = NULL;
-    if (esp_board_manager_get_device_config(name, &raw_cfg) != ESP_OK || raw_cfg == NULL) {
-        ESP_LOGW(TAG, "button %s: config unavailable", name);
-        return 0;
-    }
-    const dev_button_config_t *cfg = raw_cfg;
-    const char *sub_type = cfg->sub_type != NULL ? cfg->sub_type : "";
-
-#ifdef CONFIG_ESP_BOARD_PERIPH_GPIO_SUPPORT
-    if (strcmp(sub_type, "gpio") == 0) {
-        return bridge_claim_gpio_periph(name, owner_tag,
-                                        cfg->sub_cfg.gpio.gpio_name);
-    }
+/* IDF 6 moves peripheral counts from SoC capabilities to HAL. */
+#if SOC_I2S_SUPPORTED
+#ifdef SOC_I2S_NUM
+#define BRIDGE_I2S_COUNT SOC_I2S_NUM
+#else
+#include "hal/i2s_ll.h"
+#define BRIDGE_I2S_COUNT I2S_LL_GET(INST_NUM)
+#endif
+#endif
+#if SOC_ADC_SUPPORTED
+#ifdef SOC_ADC_CHANNEL_NUM
+#define BRIDGE_ADC_CHANNEL_COUNT(unit) SOC_ADC_CHANNEL_NUM(unit)
+#else
+#define BRIDGE_ADC_CHANNEL_COUNT(unit) ADC_LL_CHANNEL_NUM(unit)
+#endif
 #endif
 
-    /* adc_single / adc_multi / custom-driver buttons need family-module
-     * arbitration; ADC keys are not part of the current key set. */
-    ESP_LOGD(TAG, "button %s: sub_type '%s' not extracted", name, sub_type);
-    return 0;
-}
-#endif
+static const char *TAG = "claw_hw_bridge";
 
-static size_t bridge_extract_custom(const char *name, const char *owner_tag)
-{
-    (void)owner_tag;
-    ESP_LOGW(TAG, "custom device %s: introspection not supported; skipping (family module must lease dev:%s explicitly)",
-             name, name);
-    return 0;
-}
-
-typedef size_t (*bridge_extractor_fn)(const char *name, const char *owner_tag);
+/* SDMMC: slot, clock, command and up to eight data pins. */
+#define RESOURCE_MAX_KEYS 11
 
 typedef struct {
-    const char         *type;
-    bridge_extractor_fn extract;
-} bridge_type_entry_t;
+    char (*keys)[CLAW_HW_KEY_SIZE];
+    claw_hw_resource_config_t *resources;
+    const char **names;
+    size_t count;
+    size_t capacity;
+} bridge_catalog_t;
 
-static const bridge_type_entry_t s_known_types[] = {
-#ifdef CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT
-    { ESP_BOARD_DEVICE_TYPE_DISPLAY_LCD, bridge_extract_display_lcd },
-#endif
-#ifdef CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUPPORT
-    { ESP_BOARD_DEVICE_TYPE_LCD_TOUCH,   bridge_extract_lcd_touch   },
-#endif
-#ifdef CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT
-    { ESP_BOARD_DEVICE_TYPE_AUDIO_CODEC, bridge_extract_audio_codec },
-#endif
-#ifdef CONFIG_ESP_BOARD_DEV_POWER_CTRL_SUPPORT
-    { ESP_BOARD_DEVICE_TYPE_POWER_CTRL,  bridge_extract_power_ctrl  },
-#endif
-#ifdef CONFIG_ESP_BOARD_DEV_GPIO_CTRL_SUPPORT
-    { ESP_BOARD_DEVICE_TYPE_GPIO_CTRL,   bridge_extract_gpio_ctrl   },
-#endif
-#ifdef CONFIG_ESP_BOARD_DEV_LEDC_CTRL_SUPPORT
-    { ESP_BOARD_DEVICE_TYPE_LEDC_CTRL,   bridge_extract_ledc_ctrl   },
-#endif
-#ifdef CONFIG_ESP_BOARD_DEV_BUTTON_SUPPORT
-    { ESP_BOARD_DEVICE_TYPE_BUTTON,      bridge_extract_button      },
-#endif
-    { BRIDGE_TYPE_CUSTOM,                bridge_extract_custom      },
-};
-
-esp_err_t app_claw_hw_bridge_register_board_devices(void)
+/* Temporary batch storage; this does not limit the registry. */
+static size_t physical_catalog_size(void)
 {
-    /* Idempotent — the bridge holds long-lived leases and must not double-
-     * register on a second call. */
-    portENTER_CRITICAL(&s_bridge_init_spinlock);
-    bool already = s_bridge_registered;
-    portEXIT_CRITICAL(&s_bridge_init_spinlock);
-    if (already) {
-        return ESP_OK;
+    const app_claw_hw_board_config_t *board = &app_claw_hw_generated_board;
+    size_t capacity = GPIO_NUM_MAX + SOC_SPI_PERIPH_NUM + board->group_count;
+#if SOC_I2C_SUPPORTED
+    capacity += SOC_I2C_NUM;
+#endif
+#if SOC_UART_SUPPORTED
+    capacity += SOC_UART_NUM;
+#endif
+#if SOC_I2S_SUPPORTED
+    capacity += BRIDGE_I2S_COUNT;
+#endif
+#if SOC_ADC_SUPPORTED
+    for (int unit = 0; unit < SOC_ADC_PERIPH_NUM; ++unit) capacity += BRIDGE_ADC_CHANNEL_COUNT(unit) + 1;
+#endif
+#if SOC_LEDC_SUPPORTED
+    capacity += LEDC_SPEED_MODE_MAX * (LEDC_TIMER_MAX + LEDC_CHANNEL_MAX);
+#endif
+    for (size_t i = 0; i < board->group_count; ++i) capacity += board->groups[i].resource_count * RESOURCE_MAX_KEYS;
+    return capacity;
+}
+
+static void catalog_delete(bridge_catalog_t *catalog)
+{
+    if (!catalog) return;
+    free(catalog->names);
+    free(catalog->resources);
+    free(catalog->keys);
+    free(catalog);
+}
+
+static bridge_catalog_t *catalog_create(size_t capacity)
+{
+    bridge_catalog_t *catalog = calloc(1, sizeof(*catalog));
+    if (!catalog) return NULL;
+    catalog->capacity = capacity ? capacity : 1;
+    catalog->keys = calloc(catalog->capacity, sizeof(*catalog->keys));
+    catalog->resources = calloc(catalog->capacity, sizeof(*catalog->resources));
+    catalog->names = calloc(catalog->capacity, sizeof(*catalog->names));
+    if (!catalog->keys || !catalog->resources || !catalog->names) {
+        catalog_delete(catalog);
+        return NULL;
     }
+    return catalog;
+}
 
-    esp_err_t err = bridge_ensure_mutex();
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = claw_hw_registry_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "claw_hw_registry_init failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    size_t total_devices_seen = 0;
-    size_t total_extractable_devices_seen = 0;
-    size_t total_leases_registered = 0;
-
-    for (size_t t = 0; t < sizeof(s_known_types) / sizeof(s_known_types[0]); ++t) {
-        const bridge_type_entry_t *entry = &s_known_types[t];
-        void *cursor = NULL;
-        const char *dev_name = NULL;
-        bool is_custom = (strcmp(entry->type, BRIDGE_TYPE_CUSTOM) == 0);
-        while (esp_board_device_iterate_name_by_type(entry->type, &cursor, &dev_name) == ESP_OK &&
-               dev_name != NULL) {
-            char owner_tag[BRIDGE_OWNER_TAG_MAX];
-            snprintf(owner_tag, sizeof(owner_tag), "board/%s", dev_name);
-            total_devices_seen++;
-            if (!is_custom) {
-                total_extractable_devices_seen++;
-            }
-            size_t before = total_leases_registered;
-            size_t got = entry->extract(dev_name, owner_tag);
-            total_leases_registered += got;
-            if (!is_custom && got == 0) {
-                ESP_LOGW(TAG, "device %s (type=%s): no underlying resources extracted",
-                         dev_name, entry->type);
-            }
-            (void)before;
-        }
-    }
-
-    ESP_LOGI(TAG, "board bridge registered %u lease(s) across %u device(s) (%u extractable)",
-             (unsigned)total_leases_registered,
-             (unsigned)total_devices_seen,
-             (unsigned)total_extractable_devices_seen);
-
-    portENTER_CRITICAL(&s_bridge_init_spinlock);
-    s_bridge_registered = true;
-    portEXIT_CRITICAL(&s_bridge_init_spinlock);
-
-    if (total_extractable_devices_seen > 0 && total_leases_registered == 0) {
-        ESP_LOGE(TAG, "board declared %u extractable device(s) but bridge registered nothing",
-                 (unsigned)total_extractable_devices_seen);
+static esp_err_t catalog_add(bridge_catalog_t *catalog, const char *key, claw_hw_policy_t policy)
+{
+    if (!key || !key[0] || strlen(key) >= CLAW_HW_KEY_SIZE) return ESP_ERR_INVALID_ARG;
+    size_t index = 0;
+    while (index < catalog->count && strcmp(catalog->keys[index], key) != 0) ++index;
+    if (index == catalog->count) {
+        if (index == catalog->capacity) return ESP_ERR_INVALID_SIZE;
+        strcpy(catalog->keys[index], key);
+        catalog->resources[index] = (claw_hw_resource_config_t){catalog->keys[index], policy};
+        catalog->names[index] = catalog->keys[index];
+        ++catalog->count;
+    } else if (catalog->resources[index].policy != policy) {
         return ESP_ERR_INVALID_STATE;
     }
     return ESP_OK;
 }
 
-esp_err_t app_claw_hw_lease_device(const char *device_name,
-                                   const char *owner_tag,
-                                   claw_hw_mode_t mode,
-                                   claw_hw_lease_handle_t *out_lease,
-                                   void **out_device_handle)
+static esp_err_t catalog_add_resource(bridge_catalog_t *catalog, app_claw_hw_resource_kind_t kind, int a, int b)
 {
-    if (device_name == NULL || device_name[0] == '\0' ||
-        owner_tag == NULL || owner_tag[0] == '\0' || out_lease == NULL) {
-        return ESP_ERR_INVALID_ARG;
+    char key[CLAW_HW_KEY_SIZE];
+    const char *result = NULL;
+    switch (kind) {
+    case APP_CLAW_HW_GPIO:
+        if (a < 0 || a >= GPIO_NUM_MAX || !GPIO_IS_VALID_GPIO(a)) return ESP_ERR_INVALID_ARG;
+        result = claw_hw_key_gpio(key, sizeof(key), a); break;
+    case APP_CLAW_HW_I2C_BUS: result = claw_hw_key_i2c_controller(key, sizeof(key), a); break;
+    case APP_CLAW_HW_I2C_ADDR: result = claw_hw_key_i2c_addr(key, sizeof(key), a, b); break;
+    case APP_CLAW_HW_I2S_BUS: result = claw_hw_key_i2s_bus(key, sizeof(key), a); break;
+    case APP_CLAW_HW_SPI_BUS: result = claw_hw_key_spi_bus(key, sizeof(key), a); break;
+    case APP_CLAW_HW_UART_BUS: result = claw_hw_key_uart_bus(key, sizeof(key), a); break;
+    case APP_CLAW_HW_ADC_UNIT: result = claw_hw_key_adc_unit(key, sizeof(key), a); break;
+    case APP_CLAW_HW_ADC_CHANNEL: result = claw_hw_key_adc_channel(key, sizeof(key), a, b); break;
+    case APP_CLAW_HW_LEDC_TIMER: result = claw_hw_key_ledc_timer(key, sizeof(key), a, b); break;
+    case APP_CLAW_HW_LEDC_CHANNEL: result = claw_hw_key_ledc_channel(key, sizeof(key), a, b); break;
+    case APP_CLAW_HW_SDMMC_SLOT: result = claw_hw_key_sdmmc_slot(key, sizeof(key), a); break;
+    case APP_CLAW_HW_DSI_BUS: result = claw_hw_key_dsi_bus(key, sizeof(key), a); break;
+    case APP_CLAW_HW_LDO_CHANNEL: result = claw_hw_key_ldo_channel(key, sizeof(key), a); break;
+    default: return ESP_ERR_INVALID_ARG;
     }
-    *out_lease = NULL;
-    if (out_device_handle != NULL) {
-        *out_device_handle = NULL;
-    }
+    return catalog_add(catalog, result, CLAW_HW_EXCLUSIVE);
+}
 
-    /* Resolve the device first so an unknown name never creates a stray
-     * registry row. */
-    void *device_handle = NULL;
-    esp_err_t err = esp_board_manager_get_device_handle(device_name, &device_handle);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "lease_device: unknown device '%s' (%s)",
-                 device_name, esp_err_to_name(err));
-        return ESP_ERR_NOT_FOUND;
-    }
+static esp_err_t catalog_add_device(bridge_catalog_t *catalog, const app_claw_hw_group_t *group)
+{
+    if (!group->device) return ESP_OK;
+    char key[CLAW_HW_KEY_SIZE];
+    return catalog_add(catalog, claw_hw_key_device(key, sizeof(key), group->name), CLAW_HW_EXCLUSIVE);
+}
 
-    /* Handle callers that run before the bridge init path. */
-    err = claw_hw_registry_init();
-    if (err != ESP_OK) {
-        return err;
-    }
+#define ADD(kind, a, b) do { \
+    esp_err_t err = catalog_add_resource(catalog, APP_CLAW_HW_##kind, a, b); \
+    if (err != ESP_OK) return err; \
+} while (0)
 
-    char key[BRIDGE_KEY_BUF];
-    if (claw_hw_key_device(key, sizeof(key), device_name) == NULL) {
-        return ESP_ERR_INVALID_ARG;
+static esp_err_t add_board_resource(bridge_catalog_t *catalog, const app_claw_hw_resource_t *resource)
+{
+    esp_err_t err = catalog_add_resource(catalog, resource->kind, resource->a, resource->b);
+    if (err != ESP_OK) return err;
+#if SOC_ADC_SUPPORTED
+    if (resource->kind == APP_CLAW_HW_ADC_CHANNEL) {
+        int unit = resource->a, channel = resource->b;
+        if (unit < 0 || unit >= SOC_ADC_PERIPH_NUM || channel < 0 || channel >= BRIDGE_ADC_CHANNEL_COUNT(unit)) return ESP_ERR_INVALID_ARG;
+        ADD(GPIO, adc_channel_io_map[unit][channel], 0);
     }
-
-    claw_hw_claim_config_t claim = {
-        .resource      = key,
-        .owner_tag     = owner_tag,
-        .mode          = mode,
-        .on_release    = NULL,
-        .user_ctx      = NULL,
-        .sub_resources = NULL,
-    };
-    claw_hw_lease_handle_t lease = NULL;
-    err = claw_hw_claim(&claim, &lease);
-    if (err != ESP_OK) {
-        return err;
+#endif
+#if SOC_SDMMC_HOST_SUPPORTED && !SOC_SDMMC_USE_GPIO_MATRIX
+    if (resource->kind == APP_CLAW_HW_SDMMC_SLOT) {
+        int slot = resource->a, width = resource->b;
+        if (slot < 0 || slot >= SOC_SDMMC_NUM_SLOTS || (width != 1 && width != 4 && width != 8)) return ESP_ERR_INVALID_ARG;
+        if (width > sdmmc_slot_info[slot].width) return ESP_ERR_INVALID_ARG;
+        const sdmmc_slot_io_info_t *pins = &sdmmc_slot_gpio_num[slot];
+        const int data[] = {pins->d0, pins->d1, pins->d2, pins->d3, pins->d4, pins->d5, pins->d6, pins->d7};
+        ADD(GPIO, pins->clk, 0);
+        ADD(GPIO, pins->cmd, 0);
+        for (int i = 0; i < width; ++i) ADD(GPIO, data[i], 0);
     }
+#endif
+    return ESP_OK;
+}
 
-    *out_lease = lease;
-    if (out_device_handle != NULL) {
-        *out_device_handle = device_handle;
+static esp_err_t build_catalog(bridge_catalog_t *catalog)
+{
+    for (int pin = 0; pin < GPIO_NUM_MAX; ++pin) {
+        if (GPIO_IS_VALID_GPIO(pin)) ADD(GPIO, pin, 0);
+    }
+    for (int host = SPI2_HOST; host < SOC_SPI_PERIPH_NUM; ++host) ADD(SPI_BUS, host, 0);
+#if SOC_I2C_SUPPORTED
+    for (int port = 0; port < SOC_I2C_NUM; ++port) {
+        ADD(I2C_BUS, port, 0);
+    }
+#endif
+#if SOC_UART_SUPPORTED
+    for (int port = 0; port < SOC_UART_NUM; ++port) ADD(UART_BUS, port, 0);
+#endif
+#if SOC_I2S_SUPPORTED
+    for (int port = 0; port < BRIDGE_I2S_COUNT; ++port) ADD(I2S_BUS, port, 0);
+#endif
+#if SOC_ADC_SUPPORTED
+    for (int unit = 0; unit < SOC_ADC_PERIPH_NUM; ++unit) {
+        ADD(ADC_UNIT, unit, 0);
+        for (int channel = 0; channel < BRIDGE_ADC_CHANNEL_COUNT(unit); ++channel) ADD(ADC_CHANNEL, unit, channel);
+    }
+#endif
+#if SOC_LEDC_SUPPORTED
+    for (int mode = 0; mode < LEDC_SPEED_MODE_MAX; ++mode) {
+        for (int timer = 0; timer < LEDC_TIMER_MAX; ++timer) ADD(LEDC_TIMER, mode, timer);
+        for (int channel = 0; channel < LEDC_CHANNEL_MAX; ++channel) ADD(LEDC_CHANNEL, mode, channel);
+    }
+#endif
+    const app_claw_hw_board_config_t *board = &app_claw_hw_generated_board;
+    for (size_t i = 0; i < board->group_count; ++i) {
+        const app_claw_hw_group_t *group = &board->groups[i];
+        for (size_t j = 0; j < group->resource_count; ++j) {
+            /* I2C addresses are checked when the device claims them. */
+            if (group->resources[j].kind == APP_CLAW_HW_I2C_ADDR) continue;
+            esp_err_t err = add_board_resource(catalog, &group->resources[j]);
+            if (err != ESP_OK) return err;
+        }
+        esp_err_t err = catalog_add_device(catalog, group);
+        if (err != ESP_OK) return err;
     }
     return ESP_OK;
+}
+#undef ADD
+
+typedef struct {
+    claw_hw_claim_id_t claim;
+    size_t users;
+} board_usage_t;
+
+typedef struct {
+    claw_hw_registry_handle_t registry;
+    board_usage_t usage[];
+} board_bridge_t;
+
+/* One board manager per firmware; its bridge lives until reboot. */
+static board_bridge_t *s_bridge;
+
+esp_err_t app_claw_hw_bridge_init(claw_hw_registry_handle_t registry)
+{
+    if (!registry || s_bridge) return ESP_ERR_INVALID_STATE;
+    board_bridge_t *bridge = calloc(1, sizeof(*bridge) + app_claw_hw_generated_board.group_count * sizeof(board_usage_t));
+    if (!bridge) return ESP_ERR_NO_MEM;
+    bridge_catalog_t *catalog = catalog_create(physical_catalog_size());
+    if (!catalog) { free(bridge); return ESP_ERR_NO_MEM; }
+    esp_err_t err = build_catalog(catalog);
+    if (err == ESP_OK) {
+        err = claw_hw_registry_register(registry, catalog->resources, catalog->count);
+        if (err == ESP_OK) ESP_LOGI(TAG, "Registered %u resources", (unsigned)catalog->count);
+    }
+    catalog_delete(catalog);
+    if (err != ESP_OK) { free(bridge); return err; }
+    bridge->registry = registry;
+    s_bridge = bridge;
+    return ESP_OK;
+}
+
+static const app_claw_hw_group_t *find_group(const char *name, bool device)
+{
+    const app_claw_hw_board_config_t *board = &app_claw_hw_generated_board;
+    for (size_t i = 0; i < board->group_count; ++i) {
+        const app_claw_hw_group_t *group = &board->groups[i];
+        if (group->device == device && strcmp(group->name, name) == 0) return group;
+    }
+    return NULL;
+}
+
+static esp_err_t claim_group(const app_claw_hw_group_t *group)
+{
+    board_usage_t *usage = &s_bridge->usage[group->group];
+    if (usage->users) return ESP_OK;
+    bridge_catalog_t *catalog = catalog_create(group->resource_count * RESOURCE_MAX_KEYS + 1);
+    if (!catalog) return ESP_ERR_NO_MEM;
+    esp_err_t err = ESP_OK;
+    for (size_t i = 0; i < group->resource_count && err == ESP_OK; ++i) err = add_board_resource(catalog, &group->resources[i]);
+    if (err == ESP_OK && group->board_owned) err = catalog_add_device(catalog, group);
+    if (err == ESP_OK && catalog->count) {
+        const claw_hw_claim_config_t claim = {.owner = group->name, .resources = catalog->names, .resource_count = catalog->count};
+        err = claw_hw_registry_claim(s_bridge->registry, &claim, &usage->claim);
+    }
+    catalog_delete(catalog);
+    return err;
+}
+
+static void release_group(board_usage_t *usage)
+{
+    if (!usage->claim) return;
+    esp_err_t err = claw_hw_registry_release(s_bridge->registry, usage->claim);
+    if (err == ESP_OK) usage->claim = CLAW_HW_CLAIM_INVALID;
+    else ESP_LOGE(TAG, "Release failed: %s", esp_err_to_name(err));
+}
+
+/* Called only where Board Manager creates or destroys the actual driver. */
+esp_err_t app_claw_hw_driver_init(const char *name, bool device, esp_err_t (*init)(void *, int, void **), void *config, int size, void **handle)
+{
+    if (!s_bridge) return ESP_ERR_INVALID_STATE;
+    const app_claw_hw_group_t *group = find_group(name, device);
+    if (!group) return init(config, size, handle); /* Custom devices remain outside the standard map. */
+    esp_err_t err = claim_group(group);
+    if (err != ESP_OK) return err;
+    board_usage_t *usage = &s_bridge->usage[group->group];
+    err = init(config, size, handle);
+    if (err == ESP_OK) ++usage->users;
+    else if (!usage->users) release_group(usage);
+    return err;
+}
+
+esp_err_t app_claw_hw_driver_deinit(const char *name, bool device, esp_err_t (*deinit)(void *), void *handle)
+{
+    if (!s_bridge) return ESP_ERR_INVALID_STATE;
+    const app_claw_hw_group_t *group = find_group(name, device);
+    if (group && group->device && !group->board_owned) {
+        char key[CLAW_HW_KEY_SIZE];
+        const char *access = claw_hw_key_device(key, sizeof(key), group->name);
+        if (!access) return ESP_ERR_INVALID_ARG;
+        size_t count = 0;
+        claw_hw_entry_t entry;
+        esp_err_t err = claw_hw_registry_query(s_bridge->registry, access, &entry, 1, &count);
+        if (err == ESP_ERR_INVALID_SIZE || (err == ESP_OK && entry.users)) return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = deinit(handle);
+    if (err == ESP_OK && group) {
+        board_usage_t *usage = &s_bridge->usage[group->group];
+        if (usage->users && --usage->users == 0) release_group(usage);
+    }
+    return err;
 }

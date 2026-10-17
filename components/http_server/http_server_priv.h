@@ -11,6 +11,8 @@
 
 #include "cJSON.h"
 #include "esp_http_server.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "http_server.h"
 
 #define HTTP_SERVER_CTRL_PORT         32769
@@ -18,8 +20,24 @@
 #define HTTP_SERVER_PATH_MAX          256
 #define HTTP_SERVER_UPLOAD_MAX_SIZE   (64 *1024 * 1024)
 
+#define HTTP_WEBIM_RECEIPTS 16
 typedef struct {
+    char message_id[65];
+    char session[33];
+    char *text;
+    uint32_t run_id;
+} http_webim_receipt_t;
+
+typedef struct {
+    SemaphoreHandle_t webim_lock;
+    httpd_handle_t webim_server;
+    struct { int fd; uint32_t generation; } webim_clients[8];
+    uint32_t webim_generation;
+    size_t webim_work_count;
+    http_webim_receipt_t webim_receipts[HTTP_WEBIM_RECEIPTS];
+    size_t webim_receipt_next;
     httpd_handle_t server;
+    char boot_id[17];
     char storage_base_path[HTTP_SERVER_PATH_MAX];
     http_server_services_t services;
 } http_server_ctx_t;
@@ -61,3 +79,9 @@ esp_err_t http_server_logs_start(httpd_handle_t server);
 void http_server_logs_stop(void);
 void http_server_logs_ws_fd_remove(int fd);
 esp_err_t http_server_captive_404_handler(httpd_req_t *req, httpd_err_code_t error);
+
+esp_err_t http_server_register_webim_session_routes(httpd_handle_t server);
+esp_err_t http_server_webim_send_session(httpd_req_t *req);
+esp_err_t http_server_webim_error(httpd_req_t *req, esp_err_t err);
+
+void http_server_webim_stop(void);

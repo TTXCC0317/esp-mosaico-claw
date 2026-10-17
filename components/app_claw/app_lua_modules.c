@@ -98,8 +98,8 @@
 #if CONFIG_APP_CLAW_LUA_MODULE_LCD
 #include "lua_module_lcd.h"
 #endif
-#if CONFIG_APP_CLAW_LUA_MODULE_LEDC
-#include "lua_module_ledc.h"
+#if CONFIG_APP_CLAW_LUA_DRIVER_LEDC
+#include "lua_driver_ledc.h"
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_LED_STRIP
 #include "lua_module_led_strip.h"
@@ -533,11 +533,11 @@ static esp_err_t app_lua_register_lcd(const char *fatfs_base_path)
 }
 #endif
 
-#if CONFIG_APP_CLAW_LUA_MODULE_LEDC
+#if CONFIG_APP_CLAW_LUA_DRIVER_LEDC
 static esp_err_t app_lua_register_ledc(const char *fatfs_base_path)
 {
     (void)fatfs_base_path;
-    return lua_module_ledc_register();
+    return lua_driver_ledc_register();
 }
 #endif
 
@@ -680,7 +680,7 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_MODULE_LCD
     { "lcd", "LCD", app_lua_register_lcd },
 #endif
-#if CONFIG_APP_CLAW_LUA_MODULE_LEDC
+#if CONFIG_APP_CLAW_LUA_DRIVER_LEDC
     { "ledc", "LEDC", app_lua_register_ledc },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_LED_STRIP
@@ -790,7 +790,7 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #if CONFIG_APP_CLAW_LUA_MODULE_LCD
     { "lcd", "LCD" },
 #endif
-#if CONFIG_APP_CLAW_LUA_MODULE_LEDC
+#if CONFIG_APP_CLAW_LUA_DRIVER_LEDC
     { "ledc", "LEDC" },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_LED_STRIP

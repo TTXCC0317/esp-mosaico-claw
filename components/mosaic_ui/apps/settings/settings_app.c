@@ -103,7 +103,8 @@
 #define SETTINGS_INTEGRATION_PROGRESS_ON UINT32_C(0xEA04)
 #define SETTINGS_INTEGRATION_CONFIG_US 2200000LL
 #define SETTINGS_INTEGRATION_QR_QUIET 2
-#define SETTINGS_INTEGRATION_QR_FRAMES 2U
+/* Three retained Canvas frames plus one replacement frame. */
+#define SETTINGS_INTEGRATION_QR_FRAMES 4U
 #define SETTINGS_INTEGRATION_QR_SIZE 256U
 #define SETTINGS_INTEGRATION_QR_STRIDE (SETTINGS_INTEGRATION_QR_SIZE * 2U)
 #define SETTINGS_INTEGRATION_QR_BYTES \
@@ -3391,10 +3392,9 @@ static bool settings_qr_prepare(void)
             atomic_store_explicit(&s_state.qr_frames[i].busy, false,
                                   memory_order_release);
         }
+        if (s_state.qr_frames[i].pixels == NULL) return false;
     }
-    return s_state.qr_temp != NULL && s_state.qr_code != NULL &&
-        s_state.qr_frames[0].pixels != NULL &&
-        s_state.qr_frames[1].pixels != NULL;
+    return s_state.qr_temp != NULL && s_state.qr_code != NULL;
 }
 
 static bool settings_qr_free_buffers(void)
@@ -3484,15 +3484,25 @@ static void settings_qr_push(
     char *rendered, size_t rendered_size)
 {
     if (payload == NULL || payload[0] == '\0' ||
-            strcmp(payload, rendered) == 0 || !settings_qr_prepare()) return;
-    settings_qr_frame_t *frame = settings_qr_acquire();
-    if (frame == NULL || !settings_qr_render(payload, frame->pixels, size)) {
-        settings_qr_release(frame);
+            strcmp(payload, rendered) == 0) return;
+    if (!settings_qr_prepare()) {
+        ESP_LOGW(TAG, "allocate QR buffers failed: bind=%u", (unsigned)bind);
         return;
     }
-    if (esp_gsp_canvas_push(ui, bind, frame->pixels, size * 2U,
-            settings_qr_release, frame) != ESP_GSP_OK) {
+    settings_qr_frame_t *frame = settings_qr_acquire();
+    if (frame == NULL) {
+        ESP_LOGW(TAG, "no free QR frame: bind=%u", (unsigned)bind);
+        return;
+    }
+    if (!settings_qr_render(payload, frame->pixels, size)) {
         settings_qr_release(frame);
+        ESP_LOGW(TAG, "render QR failed: bind=%u", (unsigned)bind);
+        return;
+    }
+    const esp_gsp_err_t err = esp_gsp_canvas_push(ui, bind, frame->pixels, size * 2U, settings_qr_release, frame);
+    if (err != ESP_GSP_OK) {
+        settings_qr_release(frame);
+        ESP_LOGW(TAG, "push QR failed: bind=%u err=%d", (unsigned)bind, (int)err);
         return;
     }
     strlcpy(rendered, payload, rendered_size);

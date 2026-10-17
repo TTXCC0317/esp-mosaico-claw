@@ -5,12 +5,23 @@ Product builds add one shared Font Catalog to the same `ui_apps` mmap partition:
 
 - `hub/generated` and `apps/*/generated` are self-contained intermediates.
 - `common/generated/linked` contains product bundles after font linking.
-- `common/generated/common-fonts.gspb` is the Launcher-owned常驻 Catalog.
+- `common/generated/common-fonts.gspb` is the Launcher-owned Catalog.
 - `common/generated/font-link-report.md` records dependencies and size savings.
 
-Run `./regenerate_font_catalog.sh` after changing a scene. It regenerates every
+Run `python regenerate_font_catalog.py --gspc /path/to/gspc` from this directory
+after changing a scene (`gspc.exe` on Windows). It regenerates every
 intermediate and rebuilds all linked entries, offsets, alignment, and CRC; it
 does not append bytes to an existing binary.
+
+For a single app, run, for example:
+
+```text
+python tools/generate_bundle.py --module-dir apps/settings --gspc /path/to/gspc
+```
+Configuration checks Pillow and the `esp-gsp-tools` API independently. If the compiler manager is missing or incompatible, run
+`python -m pip install -U esp-gsp-tools` with that same interpreter. GSPC is a
+separate executable whose version is selected by the component; upgrading the
+manager does not replace a missing compiler release for the host platform.
 
 The Loader opens the Catalog once and passes it to each App Context. Context
 creation resolves local fonts first and Catalog fonts second. Rendering retains

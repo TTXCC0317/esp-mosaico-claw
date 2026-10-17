@@ -10,6 +10,7 @@
 #include <stdbool.h>
 
 #include "bmi2.h"
+#include "esp_check.h"
 #include "esp_board_manager.h"
 #include "esp_log.h"
 #include "esp_timer.h"

@@ -11,6 +11,10 @@ function(mosaic_setup_bundle_generation_for_target
             "mosaic_ui: esp-gsp component directory is required")
     endif()
 
+    # Use the active ESP-IDF environment for both dependency checks and builds.
+    if(DEFINED PYTHON AND EXISTS "${PYTHON}")
+        set(Python3_EXECUTABLE "${PYTHON}")
+    endif()
     find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
     set(mosaic_python_requirements "${CMAKE_SOURCE_DIR}/requirements.txt")
     if(NOT EXISTS "${mosaic_python_requirements}")
@@ -59,6 +63,23 @@ function(mosaic_setup_bundle_generation_for_target
     endif()
     message(STATUS "mosaic_ui: using Pillow ${mosaic_pillow_version}")
 
+    # Pillow being installed does not imply that the compiler manager is usable.
+    # Check the API used by download_gspc.py, including older manager installs.
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" -c
+                "from gsp.execute import executable_from_environment"
+        RESULT_VARIABLE mosaic_gsp_tools_result
+        ERROR_VARIABLE mosaic_gsp_tools_error
+        OUTPUT_QUIET)
+    if(NOT mosaic_gsp_tools_result EQUAL 0)
+        message(FATAL_ERROR
+            "mosaic_ui: esp-gsp-tools is unavailable or incompatible in "
+            "${Python3_EXECUTABLE}\n${mosaic_gsp_tools_error}\n"
+            "Install/upgrade it in this Python environment:\n"
+            "  \"${Python3_EXECUTABLE}\" -m pip install -U esp-gsp-tools\n"
+            "In PowerShell, prefix the quoted executable with &.")
+    endif()
+
     # Scene generators remain Python-owned.  The compiler/packager is supplied
     # as a prebuilt Rust binary so the application build does not depend on the
     # Python gspc implementation.
@@ -98,7 +119,7 @@ function(mosaic_setup_bundle_generation_for_target
     esp_gsp_check_gspc_command(mosaic_gspc_version "${mosaic_gspc}")
     message(STATUS "mosaic: validated ${mosaic_gspc_version}")
 
-    get_filename_component(python_dir "${Python3_EXECUTABLE}" DIRECTORY)
+    set(mosaic_scene_builder "${root}/tools/generate_bundle.py")
     set(gen_root "${binary_dir}/mosaic_gen")
     set(linked_dir "${gen_root}/linked")
     set(font_catalog "${gen_root}/common-fonts.gspb")
@@ -176,21 +197,7 @@ function(mosaic_setup_bundle_generation_for_target
             list(APPEND scene_source_deps "${module_dir}/${scene_source}")
         endforeach()
 
-        if(CMAKE_HOST_WIN32)
-            set(mosaic_path_sep "\\;")
-            string(REPLACE ";" "\\;" mosaic_escaped_path "$ENV{PATH}")
-        else()
-            set(mosaic_path_sep ":")
-            set(mosaic_escaped_path "$ENV{PATH}")
-        endif()
-        set(regen_env
-            "PATH=${python_dir}${mosaic_path_sep}${mosaic_escaped_path}"
-            "PYTHONPATH=${gsp_dir}/tools"
-            "GSPC=${mosaic_gspc}"
-            "GSP_ROOT=${gsp_dir}"
-            "ESP_GSP_ROOT=${gsp_dir}"
-            "MOSAIC_APP_STEM=${gsp_stem}"
-            "MOSAIC_GENERATED_DIR=${out_dir}")
+        set(scene_profile_args)
         if(DEFINED MOSAIC_SCENE_PROFILE AND
                 NOT MOSAIC_SCENE_PROFILE STREQUAL "")
             if(NOT EXISTS "${MOSAIC_SCENE_PROFILE}")
@@ -198,20 +205,36 @@ function(mosaic_setup_bundle_generation_for_target
                     "mosaic_ui: scene profile does not exist: "
                     "${MOSAIC_SCENE_PROFILE}")
             endif()
-            list(APPEND regen_env
-                "MOSAIC_SCENE_PROFILE=${MOSAIC_SCENE_PROFILE}")
+            list(APPEND scene_profile_args
+                --profile "${MOSAIC_SCENE_PROFILE}")
             list(APPEND scene_source_deps "${MOSAIC_SCENE_PROFILE}")
+        endif()
+
+        # Track the default/fixed profiles and helper generators as well.
+        list(APPEND scene_source_deps "${root}/common/mosaic_rgb565_auto.yaml")
+        if(module_slug STREQUAL "welcome")
+            list(APPEND scene_source_deps
+                "${module_dir}/scene/esp32s31_rgb565_compact.yaml")
+        elseif(module_slug STREQUAL "weather")
+            list(APPEND scene_source_deps
+                "${module_dir}/scene/generate_forecast_icon_data.py")
         endif()
 
         add_custom_command(
             OUTPUT "${bundle_out}" ${header_outputs}
-            COMMAND ${CMAKE_COMMAND} -E env ${regen_env}
-                    bash "${module_dir}/scene/regenerate.sh"
+            COMMAND "${Python3_EXECUTABLE}" "${mosaic_scene_builder}"
+                    --module-dir "${module_dir}"
+                    --generator "${module_dir}/${MOSAIC_APP_GENERATOR}"
+                    --bundle-name "${bundle_name}"
+                    --output-dir "${out_dir}"
+                    --gspc "${mosaic_gspc}"
+                    --gsp-root "${gsp_dir}"
+                    ${scene_profile_args}
             COMMAND "${Python3_EXECUTABLE}"
                     "${root}/common/filter_i18n_header.py"
                     "${out_dir}" "${gsp_stem}"
             WORKING_DIRECTORY "${module_dir}/scene"
-            DEPENDS "${module_dir}/scene/regenerate.sh"
+            DEPENDS "${mosaic_scene_builder}" "${manifest}"
                     "${module_dir}/${MOSAIC_APP_GENERATOR}"
                     ${scene_source_deps}
                     "${root}/common/scene_common.py"

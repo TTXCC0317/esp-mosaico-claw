@@ -30,6 +30,7 @@ typedef struct {
 } magnetometer_config_t;
 
 typedef struct {
+    /* Keep the native sensor first for Board Manager and Lua consumers. */
     struct bmm150_dev dev;
     i2c_master_dev_handle_t i2c_dev;
     uint8_t i2c_addr;
@@ -191,7 +192,7 @@ static int magnetometer_init_common(const magnetometer_config_t *cfg, void **dev
         return ret;
     }
 
-    *device_handle = handle;
+    *device_handle = &handle->dev;
     ESP_LOGI(TAG, "BMM150 magnetometer %s initialized: yaml_addr=0x%02X i2c_addr=0x%02X", cfg->name, cfg->addr, i2c_addr);
     return ESP_OK;
 }
@@ -206,6 +207,7 @@ static int magnetometer_deinit_common(void *device_handle)
     int8_t rslt = bmm150_set_op_mode(&settings, &handle->dev);
     if (rslt != BMM150_OK) {
         ESP_LOGE(TAG, "BMM150 suspend failed at addr 0x%02X: %d", handle->i2c_addr, rslt);
+        return ESP_FAIL;
     }
 
     esp_err_t ret = i2c_master_bus_rm_device(handle->i2c_dev);
@@ -216,7 +218,7 @@ static int magnetometer_deinit_common(void *device_handle)
 
     ESP_LOGI(TAG, "BMM150 magnetometer deinitialized: addr=0x%02X", handle->i2c_addr);
     free(handle);
-    return rslt == BMM150_OK ? ESP_OK : ESP_FAIL;
+    return ESP_OK;
 }
 
 static int magnetometer_1_init(void *config, int cfg_size, void **device_handle)
