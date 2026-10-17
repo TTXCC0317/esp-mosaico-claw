@@ -10,6 +10,7 @@
 #include "mosaic_hub_binds.h"
 #include "mosaic_hub_objects.h"
 #include "mosaic_hub_templates.h"
+#include "mosaic_i18n.h"
 #include "gsp_analog_clock.h"
 #include "mosaic_ui.h"
 #include "mosaic_settings.h"
@@ -19,6 +20,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 
 #if defined(ESP_PLATFORM)
 #include "freertos/FreeRTOS.h"
@@ -263,7 +267,8 @@ void mosaic_hub_show_board_insert(
             sizeof(s_insert_open_app_name));
     (void)esp_gsp_set_text(
         s_hub_ui, GSP_BIND_INSERT_PORT,
-        side == 'L' ? "Left port" : "Right port");
+        side == 'L' ? TR("Left port", "左侧接口") :
+                      TR("Right port", "右侧接口"));
     (void)esp_gsp_set_text(
         s_hub_ui, GSP_BIND_INSERT_BOARD_NAME, friendly_name);
     (void)esp_gsp_set_text(
@@ -745,7 +750,7 @@ static void mosaic_hub_weather_apply(
         snprintf(temperature, sizeof(temperature), "%d°",
                  (int)weather->temperature_c);
         description = weather->condition[0] != '\0'
-            ? weather->condition : "Weather";
+            ? weather->condition : TR("Weather", "天气");
     } else {
         strlcpy(temperature, "--", sizeof(temperature));
         description = "--";
@@ -912,8 +917,10 @@ static void mosaic_hub_clock_apply(esp_gsp_handle_t ui)
     snprintf(aod_clock, sizeof(aod_clock), "%02d:%02d", hour, minute);
     snprintf(status, sizeof(status), "%02d:%02d", hour, minute);
 
-    static const char *const weekdays_title[] = {
-        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+    const char *const weekdays_title[] = {
+        TR("Sun", "周日"), TR("Mon", "周一"), TR("Tue", "周二"),
+        TR("Wed", "周三"), TR("Thu", "周四"), TR("Fri", "周五"),
+        TR("Sat", "周六")
     };
 
     /* Physical clock orb emitted by hub/scene/gen_scenes.py. */
@@ -1061,28 +1068,29 @@ bool mosaic_hub_handle_action(uint16_t action_id)
             mosaic_hub_quick_render(s_hub_ui);
         }
         mosaic_hub_quick_feedback(
-            s_quick_wlan ? "Wi-Fi On" : "Wi-Fi Off");
+            s_quick_wlan ? TR("Wi-Fi On", "Wi-Fi 已开启")
+                         : TR("Wi-Fi Off", "Wi-Fi 已关闭"));
         /* The Wi-Fi publish drives both the tile and status icon. */
         return true;
     }
     if (action_id == GSP_ACT_ID_QUICK_JOIN_TOGGLE) {
         /* Reserved control: the current board has no Join backend. */
-        mosaic_hub_quick_feedback("Not Supported");
+        mosaic_hub_quick_feedback(TR("Not Supported", "暂不支持"));
         return true;
     }
     if (action_id == GSP_ACT_ID_QUICK_BLUETOOTH_TOGGLE) {
         /* Reserved until the system Bluetooth state machine is connected. */
-        mosaic_hub_quick_feedback("Not Supported");
+        mosaic_hub_quick_feedback(TR("Not Supported", "暂不支持"));
         return true;
     }
     if (action_id == GSP_ACT_ID_QUICK_LOW_POWER_TOGGLE) {
         /* Reserved until a platform low-power policy is available. */
-        mosaic_hub_quick_feedback("Not Supported");
+        mosaic_hub_quick_feedback(TR("Not Supported", "暂不支持"));
         return true;
     }
     if (action_id == GSP_ACT_ID_QUICK_RINGTONE_TOGGLE) {
         /* Notification/ringtone audio is not implemented on this board. */
-        mosaic_hub_quick_feedback("Not Supported");
+        mosaic_hub_quick_feedback(TR("Not Supported", "暂不支持"));
         return true;
     }
     if (action_id == GSP_ACT_ID_QUICK_VIBRATION_TOGGLE) {
@@ -1096,7 +1104,8 @@ bool mosaic_hub_handle_action(uint16_t action_id)
         s_quick_vibration = next;
         mosaic_hub_quick_render(s_hub_ui);
         mosaic_hub_quick_feedback(
-            next ? "Vibration On" : "Vibration Off");
+            next ? TR("Vibration On", "振动已开启")
+                 : TR("Vibration Off", "振动已关闭"));
         if (next) {
             const esp_err_t feedback_err = mosaic_ui_haptic_feedback(40U);
             if (feedback_err != ESP_OK) {

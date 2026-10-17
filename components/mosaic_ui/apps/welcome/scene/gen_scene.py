@@ -41,11 +41,15 @@ def root(callback="welcome_next"):
     return obj
 
 
-def label(x, y, w, h, text, size, color):
-    return {
+def label(x, y, w, h, text, size, color, bind=None):
+    obj = {
         "type": "label", "parent": 0, "x": x, "y": y, "w": w, "h": h,
         "text": text, "font_size": size, "fg_color": color,
     }
+    if bind:
+        obj["bind"] = bind
+        obj["name"] = bind
+    return obj
 
 
 def image(x, y, w, h, filename, **extra):
@@ -62,30 +66,34 @@ def marker(x, y, w, h, radius=2):
     }
 
 
-def skip_button():
+def skip_button(bind):
     return {
         "type": "button", "parent": 0, "x": 278, "y": 418,
         "w": 190, "h": 50, "text": "Skip Guide  ›", "font_size": 24,
         "bg_color": "#060606", "fg_color": "#91919B", "radius": 0,
-        "callback": "welcome_exit",
+        "callback": "welcome_exit", "bind": bind, "name": bind,
     }
 
 
-def gesture_header(direction, title):
+def gesture_header(scene, direction, title):
     return [
-        label(30, 64, 420, 34, direction, 24, "#FF4C01"),
-        label(30, 97, 420, 56, title, 40, "#FCFCFF"),
+        label(30, 64, 420, 34, direction, 24, "#FF4C01",
+              bind=f"i18n_welcome_{scene}_direction"),
+        label(30, 97, 420, 56, title, 40, "#FCFCFF",
+              bind=f"i18n_welcome_{scene}_title"),
     ]
 
 
 def scene_intro():
-    title1 = label(24, 52, 432, 48, "Welcome To", 44, "#FCFCFF")
+    title1 = label(24, 52, 432, 48, "Welcome To", 44, "#FCFCFF",
+                   bind="i18n_welcome_intro_title1")
     title2 = label(24, 96, 432, 48, "Mosaico", 44, "#FCFCFF")
     return [
         root(), title1, title2,
         label(24, 152, 432, 34, "Discover buttons and gestures", 22,
-              "#91919B"),
-        image(146, 212, 188, 198, "bodyDim.png"), skip_button(),
+              "#91919B", bind="i18n_welcome_intro_subtitle"),
+        image(146, 212, 188, 198, "bodyDim.png"),
+        skip_button("i18n_welcome_intro_skip"),
     ]
 
 
@@ -96,21 +104,29 @@ def scene_keys():
         root(), image(-35, 65, 299, 316, "bodyLit.png"),
         {"type": "container", "parent": 0, "x": 295, "y": 65,
          "w": 12, "h": 12, "bg_color": orange, "radius": 6},
-        label(331, 62, 145, 28, "Single-click", 18, orange),
-        label(295, 88, 181, 36, "Sleep/Go back", 24, white),
+        label(331, 62, 145, 28, "Single-click", 18, orange,
+              bind="i18n_welcome_keys_single_click"),
+        label(295, 88, 181, 36, "Sleep/Go back", 24, white,
+              bind="i18n_welcome_keys_sleep_go_back"),
         {"type": "container", "parent": 0, "x": 295, "y": 125,
          "w": 32, "h": 12, "bg_color": orange, "radius": 6},
-        label(331, 122, 145, 28, "Long-press", 18, orange),
-        label(295, 148, 181, 36, "Chat with Claw", 24, white),
-        label(12, 403, 170, 25, "Boot Key", 18, orange),
-        label(12, 426, 170, 34, "Boot Mode", 24, white),
-        label(188, 404, 120, 25, "Power Key", 18, orange),
-        label(188, 427, 175, 34, "Power Off/On", 24, white),
+        label(331, 122, 145, 28, "Long-press", 18, orange,
+              bind="i18n_welcome_keys_long_press"),
+        label(295, 148, 181, 36, "Chat with Claw", 24, white,
+              bind="i18n_welcome_keys_chat_with_claw"),
+        label(12, 403, 170, 25, "Boot Key", 18, orange,
+              bind="i18n_welcome_keys_boot_key"),
+        label(12, 426, 170, 34, "Boot Mode", 24, white,
+              bind="i18n_welcome_keys_boot_mode"),
+        label(188, 404, 120, 25, "Power Key", 18, orange,
+              bind="i18n_welcome_keys_power_key"),
+        label(188, 427, 175, 34, "Power Off/On", 24, white,
+              bind="i18n_welcome_keys_power_off_on"),
     ]
 
 
 def scene_g1():
-    return [root(), *gesture_header("Swipe down", "Open Control Center"),
+    return [root(), *gesture_header("g1", "Swipe down", "Open Control Center"),
             image(106, 185, 269, 180, "guideTop.png"),
             marker(214, 212, 52, 4),
             image({"default": 223, "min": 222, "max": 224},
@@ -118,11 +134,12 @@ def scene_g1():
                   "arrow_down.png", name="gesture_arrow"),
             image({"default": 264, "min": 263, "max": 265},
                   {"default": 287, "min": 287, "max": 343}, 69, 70,
-                  "hand.png", name="gesture_hand"), skip_button()]
+                  "hand.png", name="gesture_hand"),
+            skip_button("i18n_welcome_g1_skip")]
 
 
 def scene_g2():
-    return [root(), *gesture_header("Swipe up", "Back to Home"),
+    return [root(), *gesture_header("g2", "Swipe up", "Back to Home"),
             image(106, 179, 269, 180, "guideBottom.png"),
             marker(214, 325, 52, 4),
             image({"default": 223, "min": 222, "max": 224},
@@ -130,12 +147,14 @@ def scene_g2():
                   "arrow_up.png", name="gesture_arrow"),
             image({"default": 264, "min": 263, "max": 265},
                   {"default": 330, "min": 274, "max": 330}, 69, 70,
-                  "hand.png", name="gesture_hand"), skip_button()]
+                  "hand.png", name="gesture_hand"),
+            skip_button("i18n_welcome_g2_skip")]
 
 
 def scene_g4():
     return [
-        root(None), *gesture_header("Swipe left/right", "Switch screens"),
+        root(None),
+        *gesture_header("g4", "Swipe left/right", "Switch screens"),
         image(106, 179, 269, 180, "guideBottom.png"),
         {"type": "layer", "parent": 0,
          "x": {"default": 176, "min": 148, "max": 176},
@@ -157,7 +176,8 @@ def scene_g4():
         {"type": "button", "parent": 0, "x": 64, "y": 356,
          "w": 354, "h": 88, "text": "Get Started!", "font_size": 30,
          "bg_color": "#FF4C01", "fg_color": "#FCFCFF", "radius": 44,
-         "callback": "welcome_exit"},
+         "callback": "welcome_exit", "bind": "i18n_welcome_g4_start",
+         "name": "i18n_welcome_g4_start"},
     ]
 
 
@@ -178,6 +198,7 @@ def generate(scene_name, output, width):
     scene = {
         "screen": scene_name, "w": width, "h": 480,
         "screen_bg": "#060606", "font": font,
+        "font_link": "auto",
         "default_font_size": 18, "objects": SCENES[scene_name](),
     }
     offset = (width - WELCOME_CONTENT_WIDTH) // 2

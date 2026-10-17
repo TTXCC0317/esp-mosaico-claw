@@ -21,6 +21,7 @@
 #include "esp_timer.h"
 #include "mosaic_app_catalog.h"
 #include "mosaic_app_shell.h"
+#include "mosaic_i18n.h"
 #include "mosaic_top_notice.h"
 #include "mosaic_hub_actions.h"
 #if defined(ESP_PLATFORM)
@@ -40,6 +41,9 @@
 #define SETTINGS_TOGGLE_ON_COLOR  UINT32_C(0xFA60)
 #define SETTINGS_TEXT_COLOR       UINT32_C(0xFFFF)
 #define SETTINGS_MUTED_COLOR      UINT32_C(0x9493)
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 #define SETTINGS_LEVEL_OFF_COLOR  UINT32_C(0x18C3)
 #define SETTINGS_LEVEL_ON_COLOR   UINT32_C(0xFA60)
 #define SETTINGS_DEFAULT_VOLUME 80
@@ -228,6 +232,8 @@ typedef enum {
     SETTINGS_DETAIL_ABOUT,
     SETTINGS_DETAIL_SAFE_MODE,
     SETTINGS_DETAIL_BATTERY,
+    SETTINGS_DETAIL_LANGUAGE,
+    SETTINGS_DETAIL_CITY,
 } settings_detail_kind_t;
 
 static settings_detail_kind_t s_detail_kind = SETTINGS_DETAIL_ABOUT;
@@ -242,6 +248,7 @@ static settings_ui_state_t s_state = {
     .volume = SETTINGS_DEFAULT_VOLUME,
     .brightness_hw_available = true,
     .sound_effect_enabled = true,
+    .snapshot.weather_city_index = -1,
     .wlan = {
         .enabled = true,
         .auto_join = true,
@@ -336,6 +343,486 @@ esp_err_t mosaic_settings_set_screen_timeout(uint32_t timeout_ms)
         return ESP_ERR_NOT_SUPPORTED;
     }
     return s_state.ops.set_screen_timeout(s_state.ops.user_ctx, timeout_ms);
+}
+
+esp_err_t mosaic_settings_set_language(const char *tag)
+{
+    if (tag == NULL || tag[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_state.ops.set_language == NULL) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    return s_state.ops.set_language(s_state.ops.user_ctx, tag);
+}
+
+/* Built-in city presets for the Location page, grouped by province/region.
+ * Coordinates are the city centres used for the Open-Meteo forecast lookup. */
+static const mosaic_settings_city_t s_prov_beijing[] = {
+    {"Beijing", "北京", 39.9042, 116.4074},
+};
+static const mosaic_settings_city_t s_prov_tianjin[] = {
+    {"Tianjin", "天津", 39.3434, 117.3616},
+};
+static const mosaic_settings_city_t s_prov_shanghai[] = {
+    {"Shanghai", "上海", 31.2304, 121.4737},
+};
+static const mosaic_settings_city_t s_prov_chongqing[] = {
+    {"Chongqing", "重庆", 29.5630, 106.5516},
+};
+static const mosaic_settings_city_t s_prov_hebei[] = {
+    {"Shijiazhuang", "石家庄", 38.0428, 114.5149},
+    {"Tangshan", "唐山", 39.6304, 118.1802},
+    {"Qinhuangdao", "秦皇岛", 39.9354, 119.5998},
+    {"Handan", "邯郸", 36.6256, 114.5391},
+    {"Xingtai", "邢台", 37.0708, 114.5048},
+    {"Baoding", "保定", 38.8740, 115.4646},
+    {"Zhangjiakou", "张家口", 40.7686, 114.8869},
+    {"Chengde", "承德", 40.9515, 117.9634},
+    {"Cangzhou", "沧州", 38.3045, 116.8387},
+    {"Langfang", "廊坊", 39.5379, 116.6835},
+    {"Hengshui", "衡水", 37.7388, 115.6706},
+};
+static const mosaic_settings_city_t s_prov_shanxi[] = {
+    {"Taiyuan", "太原", 37.8706, 112.5489},
+    {"Datong", "大同", 40.0903, 113.2958},
+    {"Yangquan", "阳泉", 37.8570, 113.5805},
+    {"Changzhi", "长治", 36.1954, 113.1163},
+    {"Jincheng", "晋城", 35.4907, 112.8513},
+    {"Shuozhou", "朔州", 39.3317, 112.4329},
+    {"Jinzhong", "晋中", 37.6872, 112.7525},
+    {"Yuncheng", "运城", 35.0263, 111.0039},
+    {"Xinzhou", "忻州", 38.4167, 112.7337},
+    {"Linfen", "临汾", 36.0880, 111.5190},
+    {"Lvliang", "吕梁", 37.5187, 111.1344},
+};
+static const mosaic_settings_city_t s_prov_inner_mongolia[] = {
+    {"Hohhot", "呼和浩特", 40.8424, 111.7490},
+    {"Baotou", "包头", 40.6574, 109.8403},
+    {"Wuhai", "乌海", 39.6533, 106.8228},
+    {"Chifeng", "赤峰", 42.2586, 118.8878},
+    {"Tongliao", "通辽", 43.6524, 122.2436},
+    {"Ordos", "鄂尔多斯", 39.6086, 109.7810},
+    {"Hulunbuir", "呼伦贝尔", 49.2116, 119.7658},
+    {"Bayannur", "巴彦淖尔", 40.7432, 107.3870},
+    {"Ulanqab", "乌兰察布", 40.9944, 113.1328},
+};
+static const mosaic_settings_city_t s_prov_liaoning[] = {
+    {"Shenyang", "沈阳", 41.8057, 123.4315},
+    {"Dalian", "大连", 38.9140, 121.6147},
+    {"Anshan", "鞍山", 41.1086, 122.9946},
+    {"Fushun", "抚顺", 41.8797, 123.9573},
+    {"Benxi", "本溪", 41.2942, 123.7666},
+    {"Dandong", "丹东", 40.1281, 124.3546},
+    {"Jinzhou", "锦州", 41.0955, 121.1270},
+    {"Yingkou", "营口", 40.6674, 122.2354},
+    {"Fuxin", "阜新", 42.0216, 121.6701},
+    {"Liaoyang", "辽阳", 41.2697, 123.2360},
+    {"Panjin", "盘锦", 41.1244, 122.0708},
+    {"Tieling", "铁岭", 42.2863, 123.8430},
+    {"Chaoyang", "朝阳", 41.5768, 120.4509},
+    {"Huludao", "葫芦岛", 40.7110, 120.8370},
+};
+static const mosaic_settings_city_t s_prov_jilin[] = {
+    {"Changchun", "长春", 43.8171, 125.3235},
+    {"Jilin", "吉林", 43.8378, 126.5494},
+    {"Siping", "四平", 43.1664, 124.3504},
+    {"Liaoyuan", "辽源", 42.8877, 125.1437},
+    {"Tonghua", "通化", 41.7283, 125.9399},
+    {"Baishan", "白山", 41.9400, 126.4239},
+    {"Songyuan", "松原", 45.1411, 124.8252},
+    {"Baicheng", "白城", 45.6196, 122.8410},
+    {"Yanji", "延吉", 42.9048, 129.5092},
+};
+static const mosaic_settings_city_t s_prov_heilongjiang[] = {
+    {"Harbin", "哈尔滨", 45.8038, 126.5349},
+    {"Qiqihar", "齐齐哈尔", 47.3543, 123.9180},
+    {"Jixi", "鸡西", 45.2955, 130.9690},
+    {"Hegang", "鹤岗", 47.3500, 130.2976},
+    {"Shuangyashan", "双鸭山", 46.6436, 131.1576},
+    {"Daqing", "大庆", 46.5891, 125.1039},
+    {"Yichun", "伊春", 47.7280, 128.8417},
+    {"Jiamusi", "佳木斯", 46.7998, 130.3189},
+    {"Qitaihe", "七台河", 45.7711, 131.0032},
+    {"Mudanjiang", "牡丹江", 44.5527, 129.6329},
+    {"Heihe", "黑河", 50.2451, 127.5285},
+    {"Suihua", "绥化", 46.6373, 126.9906},
+};
+static const mosaic_settings_city_t s_prov_jiangsu[] = {
+    {"Nanjing", "南京", 32.0603, 118.7969},
+    {"Wuxi", "无锡", 31.4912, 120.3119},
+    {"Xuzhou", "徐州", 34.2044, 117.2857},
+    {"Changzhou", "常州", 31.8107, 119.9740},
+    {"Suzhou", "苏州", 31.2989, 120.5853},
+    {"Nantong", "南通", 31.9802, 120.8943},
+    {"Lianyungang", "连云港", 34.5967, 119.2216},
+    {"Huaian", "淮安", 33.5515, 119.0212},
+    {"Yancheng", "盐城", 33.3496, 120.1615},
+    {"Yangzhou", "扬州", 32.3942, 119.4129},
+    {"Zhenjiang", "镇江", 32.1879, 119.4250},
+    {"Taizhou", "泰州", 32.4849, 119.9153},
+    {"Suqian", "宿迁", 33.9630, 118.2754},
+};
+static const mosaic_settings_city_t s_prov_zhejiang[] = {
+    {"Hangzhou", "杭州", 30.2741, 120.1551},
+    {"Ningbo", "宁波", 29.8683, 121.5440},
+    {"Wenzhou", "温州", 27.9949, 120.6994},
+    {"Jiaxing", "嘉兴", 30.7522, 120.7500},
+    {"Huzhou", "湖州", 30.8927, 120.0863},
+    {"Shaoxing", "绍兴", 30.0303, 120.5802},
+    {"Jinhua", "金华", 29.0785, 119.6474},
+    {"Quzhou", "衢州", 28.9359, 118.8747},
+    {"Zhoushan", "舟山", 29.9853, 122.2072},
+    {"Taizhou", "台州", 28.6560, 121.4207},
+    {"Lishui", "丽水", 28.4674, 119.9229},
+};
+static const mosaic_settings_city_t s_prov_anhui[] = {
+    {"Hefei", "合肥", 31.8206, 117.2272},
+    {"Wuhu", "芜湖", 31.3529, 118.4330},
+    {"Bengbu", "蚌埠", 32.9166, 117.3893},
+    {"Huainan", "淮南", 32.6255, 116.9998},
+    {"Maanshan", "马鞍山", 31.6705, 118.5063},
+    {"Huaibei", "淮北", 33.9558, 116.7983},
+    {"Tongling", "铜陵", 30.9445, 117.8121},
+    {"Anqing", "安庆", 30.5433, 117.0631},
+    {"Huangshan", "黄山", 29.7147, 118.3376},
+    {"Chuzhou", "滁州", 32.3018, 118.3168},
+    {"Fuyang", "阜阳", 32.8969, 115.8143},
+    {"Suzhou", "宿州", 33.6461, 116.9642},
+    {"Luan", "六安", 31.7337, 116.5219},
+    {"Bozhou", "亳州", 33.8446, 115.7787},
+    {"Chizhou", "池州", 30.6600, 117.4914},
+    {"Xuancheng", "宣城", 30.9406, 118.7584},
+};
+static const mosaic_settings_city_t s_prov_fujian[] = {
+    {"Fuzhou", "福州", 26.0745, 119.2965},
+    {"Xiamen", "厦门", 24.4798, 118.0894},
+    {"Putian", "莆田", 25.4310, 119.0079},
+    {"Sanming", "三明", 26.2634, 117.6390},
+    {"Quanzhou", "泉州", 24.8741, 118.6757},
+    {"Zhangzhou", "漳州", 24.5130, 117.6472},
+    {"Nanping", "南平", 26.6436, 118.1778},
+    {"Longyan", "龙岩", 25.0751, 117.0179},
+    {"Ningde", "宁德", 26.6657, 119.5480},
+};
+static const mosaic_settings_city_t s_prov_jiangxi[] = {
+    {"Nanchang", "南昌", 28.6820, 115.8579},
+    {"Jingdezhen", "景德镇", 29.2687, 117.1784},
+    {"Pingxiang", "萍乡", 27.6229, 113.8549},
+    {"Jiujiang", "九江", 29.7051, 116.0019},
+    {"Xinyu", "新余", 27.8174, 114.9171},
+    {"Yingtan", "鹰潭", 28.2600, 117.0690},
+    {"Ganzhou", "赣州", 25.8310, 114.9350},
+    {"Jian", "吉安", 27.1116, 114.9928},
+    {"Yichun", "宜春", 27.8141, 114.4162},
+    {"Fuzhou", "抚州", 27.9492, 116.3581},
+    {"Shangrao", "上饶", 28.4548, 117.9433},
+};
+static const mosaic_settings_city_t s_prov_shandong[] = {
+    {"Jinan", "济南", 36.6512, 117.1201},
+    {"Qingdao", "青岛", 36.0671, 120.3826},
+    {"Zibo", "淄博", 36.8135, 118.0550},
+    {"Zaozhuang", "枣庄", 34.8107, 117.3238},
+    {"Dongying", "东营", 37.4340, 118.6748},
+    {"Yantai", "烟台", 37.4638, 121.4479},
+    {"Weifang", "潍坊", 36.7069, 119.1618},
+    {"Jining", "济宁", 35.4152, 116.5870},
+    {"Taian", "泰安", 36.1949, 117.1285},
+    {"Weihai", "威海", 37.5128, 122.1201},
+    {"Rizhao", "日照", 35.4164, 119.5268},
+    {"Linyi", "临沂", 35.1045, 118.3565},
+    {"Dezhou", "德州", 37.4355, 116.3574},
+    {"Liaocheng", "聊城", 36.4569, 115.9852},
+    {"Binzhou", "滨州", 37.3827, 117.9728},
+    {"Heze", "菏泽", 35.2333, 115.4800},
+};
+static const mosaic_settings_city_t s_prov_henan[] = {
+    {"Zhengzhou", "郑州", 34.7466, 113.6254},
+    {"Kaifeng", "开封", 34.7970, 114.3076},
+    {"Luoyang", "洛阳", 34.6197, 112.4540},
+    {"Pingdingshan", "平顶山", 33.7662, 113.1926},
+    {"Anyang", "安阳", 36.0977, 114.3931},
+    {"Hebi", "鹤壁", 35.7470, 114.2972},
+    {"Xinxiang", "新乡", 35.3029, 113.9268},
+    {"Jiaozuo", "焦作", 35.2159, 113.2418},
+    {"Puyang", "濮阳", 35.7616, 115.0292},
+    {"Xuchang", "许昌", 34.0357, 113.8526},
+    {"Luohe", "漯河", 33.5759, 114.0166},
+    {"Sanmenxia", "三门峡", 34.7733, 111.2005},
+    {"Nanyang", "南阳", 32.9908, 112.5285},
+    {"Shangqiu", "商丘", 34.4146, 115.6560},
+    {"Xinyang", "信阳", 32.1470, 114.0913},
+    {"Zhoukou", "周口", 33.6204, 114.6969},
+    {"Zhumadian", "驻马店", 32.9831, 114.0228},
+};
+static const mosaic_settings_city_t s_prov_hubei[] = {
+    {"Wuhan", "武汉", 30.5928, 114.3055},
+    {"Huangshi", "黄石", 30.2000, 115.0389},
+    {"Shiyan", "十堰", 32.6294, 110.7989},
+    {"Yichang", "宜昌", 30.6919, 111.2865},
+    {"Xiangyang", "襄阳", 32.0090, 112.1226},
+    {"Ezhou", "鄂州", 30.3919, 114.8948},
+    {"Jingmen", "荆门", 31.0353, 112.1993},
+    {"Xiaogan", "孝感", 30.9245, 113.9163},
+    {"Jingzhou", "荆州", 30.3350, 112.2410},
+    {"Huanggang", "黄冈", 30.4537, 114.8722},
+    {"Xianning", "咸宁", 29.8412, 114.3224},
+    {"Suizhou", "随州", 31.6902, 113.3826},
+    {"Enshi", "恩施", 30.2721, 109.4883},
+};
+static const mosaic_settings_city_t s_prov_hunan[] = {
+    {"Changsha", "长沙", 28.2282, 112.9388},
+    {"Zhuzhou", "株洲", 27.8279, 113.1340},
+    {"Xiangtan", "湘潭", 27.8296, 112.9446},
+    {"Hengyang", "衡阳", 26.8933, 112.5718},
+    {"Shaoyang", "邵阳", 27.2389, 111.4677},
+    {"Yueyang", "岳阳", 29.3574, 113.1289},
+    {"Changde", "常德", 29.0316, 111.6984},
+    {"Zhangjiajie", "张家界", 29.1170, 110.4792},
+    {"Yiyang", "益阳", 28.5539, 112.3552},
+    {"Chenzhou", "郴州", 25.7707, 113.0146},
+    {"Yongzhou", "永州", 26.4204, 111.6134},
+    {"Huaihua", "怀化", 27.5501, 109.9785},
+    {"Loudi", "娄底", 27.7001, 111.9960},
+    {"Xiangxi", "湘西", 28.3146, 109.7400},
+};
+static const mosaic_settings_city_t s_prov_guangdong[] = {
+    {"Guangzhou", "广州", 23.1291, 113.2644},
+    {"Shenzhen", "深圳", 22.5431, 114.0579},
+    {"Zhuhai", "珠海", 22.2710, 113.5767},
+    {"Shantou", "汕头", 23.3535, 116.6822},
+    {"Foshan", "佛山", 23.0218, 113.1219},
+    {"Shaoguan", "韶关", 24.8107, 113.5972},
+    {"Zhanjiang", "湛江", 21.2707, 110.3594},
+    {"Zhaoqing", "肇庆", 23.0470, 112.4654},
+    {"Jiangmen", "江门", 22.5789, 113.0819},
+    {"Maoming", "茂名", 21.6632, 110.9255},
+    {"Huizhou", "惠州", 23.1115, 114.4160},
+    {"Meizhou", "梅州", 24.2991, 116.1224},
+    {"Shanwei", "汕尾", 22.7864, 115.3753},
+    {"Heyuan", "河源", 23.7437, 114.7000},
+    {"Yangjiang", "阳江", 21.8580, 111.9823},
+    {"Qingyuan", "清远", 23.6817, 113.0560},
+    {"Dongguan", "东莞", 23.0207, 113.7518},
+    {"Zhongshan", "中山", 22.5170, 113.3928},
+    {"Chaozhou", "潮州", 23.6567, 116.6226},
+    {"Jieyang", "揭阳", 23.5497, 116.3726},
+    {"Yunfu", "云浮", 22.9151, 112.0443},
+};
+static const mosaic_settings_city_t s_prov_guangxi[] = {
+    {"Nanning", "南宁", 22.8170, 108.3665},
+    {"Liuzhou", "柳州", 24.3146, 109.4280},
+    {"Guilin", "桂林", 25.2736, 110.2900},
+    {"Wuzhou", "梧州", 23.4767, 111.2794},
+    {"Beihai", "北海", 21.4813, 109.1199},
+    {"Fangchenggang", "防城港", 21.6868, 108.3540},
+    {"Qinzhou", "钦州", 21.9675, 108.6542},
+    {"Guigang", "贵港", 23.1115, 109.5987},
+    {"Yulin", "玉林", 22.6540, 110.1647},
+    {"Baise", "百色", 23.9022, 106.6186},
+    {"Hezhou", "贺州", 24.4038, 111.5671},
+    {"Hechi", "河池", 24.6959, 108.0851},
+    {"Laibin", "来宾", 23.7521, 109.2215},
+    {"Chongzuo", "崇左", 22.3760, 107.3646},
+};
+static const mosaic_settings_city_t s_prov_hainan[] = {
+    {"Haikou", "海口", 20.0440, 110.1988},
+    {"Sanya", "三亚", 18.2528, 109.5119},
+    {"Sansha", "三沙", 16.8328, 112.3481},
+    {"Danzhou", "儋州", 19.5209, 109.5807},
+};
+static const mosaic_settings_city_t s_prov_sichuan[] = {
+    {"Chengdu", "成都", 30.5728, 104.0668},
+    {"Zigong", "自贡", 29.3390, 104.7785},
+    {"Panzhihua", "攀枝花", 26.5821, 101.7188},
+    {"Luzhou", "泸州", 28.8717, 105.4433},
+    {"Deyang", "德阳", 31.1270, 104.3979},
+    {"Mianyang", "绵阳", 31.4675, 104.6796},
+    {"Guangyuan", "广元", 32.4358, 105.8431},
+    {"Suining", "遂宁", 30.5328, 105.5926},
+    {"Neijiang", "内江", 29.5802, 105.0584},
+    {"Leshan", "乐山", 29.5521, 103.7660},
+    {"Nanchong", "南充", 30.8373, 106.1106},
+    {"Meishan", "眉山", 30.0754, 103.8485},
+    {"Yibin", "宜宾", 28.7513, 104.6433},
+    {"Guangan", "广安", 30.4562, 106.6334},
+    {"Dazhou", "达州", 31.2090, 107.4680},
+    {"Yaan", "雅安", 30.0106, 103.0010},
+    {"Bazhong", "巴中", 31.8584, 106.7532},
+    {"Ziyang", "资阳", 30.1222, 104.6279},
+};
+static const mosaic_settings_city_t s_prov_guizhou[] = {
+    {"Guiyang", "贵阳", 26.6470, 106.6302},
+    {"Liupanshui", "六盘水", 26.5925, 104.8301},
+    {"Zunyi", "遵义", 27.7256, 106.9270},
+    {"Anshun", "安顺", 26.2456, 105.9476},
+    {"Bijie", "毕节", 27.2840, 105.2930},
+    {"Tongren", "铜仁", 27.7186, 109.1910},
+};
+static const mosaic_settings_city_t s_prov_yunnan[] = {
+    {"Kunming", "昆明", 25.0389, 102.7183},
+    {"Qujing", "曲靖", 25.4901, 103.7960},
+    {"Yuxi", "玉溪", 24.3516, 102.5430},
+    {"Baoshan", "保山", 25.1120, 99.1610},
+    {"Zhaotong", "昭通", 27.3380, 103.7170},
+    {"Lijiang", "丽江", 26.8720, 100.2300},
+    {"Puer", "普洱", 22.8250, 100.9660},
+    {"Lincang", "临沧", 23.8870, 100.0890},
+};
+static const mosaic_settings_city_t s_prov_tibet[] = {
+    {"Lhasa", "拉萨", 29.6520, 91.1721},
+    {"Shigatse", "日喀则", 29.2695, 88.8800},
+    {"Qamdo", "昌都", 31.1360, 97.1720},
+    {"Nyingchi", "林芝", 29.6500, 94.3620},
+    {"Shannan", "山南", 29.2380, 91.7660},
+    {"Nagqu", "那曲", 31.4762, 92.0524},
+};
+static const mosaic_settings_city_t s_prov_shaanxi[] = {
+    {"Xian", "西安", 34.3416, 108.9398},
+    {"Tongchuan", "铜川", 34.8967, 108.9453},
+    {"Baoji", "宝鸡", 34.3610, 107.2374},
+    {"Xianyang", "咸阳", 34.3299, 108.7092},
+    {"Weinan", "渭南", 34.4994, 109.5097},
+    {"Yanan", "延安", 36.5853, 109.4900},
+    {"Hanzhong", "汉中", 33.0776, 107.0233},
+    {"Yulin", "榆林", 38.2856, 109.7346},
+    {"Ankang", "安康", 32.6903, 109.0292},
+    {"Shangluo", "商洛", 33.8683, 109.9405},
+};
+static const mosaic_settings_city_t s_prov_gansu[] = {
+    {"Lanzhou", "兰州", 36.0611, 103.8343},
+    {"Jiayuguan", "嘉峪关", 39.7719, 98.2891},
+    {"Jinchang", "金昌", 38.5200, 102.1880},
+    {"Baiyin", "白银", 36.5448, 104.1386},
+    {"Tianshui", "天水", 34.5809, 105.7245},
+    {"Wuwei", "武威", 37.9330, 102.6380},
+    {"Zhangye", "张掖", 38.9257, 100.4498},
+    {"Jiuquan", "酒泉", 39.7440, 98.5080},
+    {"Qingyang", "庆阳", 35.7099, 107.6426},
+    {"Pingliang", "平凉", 35.5417, 106.6840},
+    {"Dingxi", "定西", 35.5790, 104.6260},
+    {"Longnan", "陇南", 33.4000, 104.9290},
+};
+static const mosaic_settings_city_t s_prov_qinghai[] = {
+    {"Xining", "西宁", 36.6171, 101.7782},
+    {"Haidong", "海东", 36.5020, 102.1040},
+};
+static const mosaic_settings_city_t s_prov_ningxia[] = {
+    {"Yinchuan", "银川", 38.4872, 106.2309},
+    {"Shizuishan", "石嘴山", 38.9840, 106.3760},
+    {"Wuzhong", "吴忠", 37.9860, 106.1980},
+    {"Guyuan", "固原", 36.0040, 106.2850},
+    {"Zhongwei", "中卫", 37.5140, 105.1900},
+};
+static const mosaic_settings_city_t s_prov_xinjiang[] = {
+    {"Urumqi", "乌鲁木齐", 43.8256, 87.6168},
+    {"Karamay", "克拉玛依", 45.5790, 84.8890},
+    {"Turpan", "吐鲁番", 42.9476, 89.1840},
+    {"Hami", "哈密", 42.8330, 93.5150},
+};
+static const mosaic_settings_city_t s_prov_taiwan[] = {
+    {"Taipei", "台北", 25.0330, 121.5654},
+    {"New Taipei", "新北", 25.0169, 121.4628},
+    {"Taichung", "台中", 24.1477, 120.6736},
+    {"Tainan", "台南", 22.9997, 120.2270},
+    {"Kaohsiung", "高雄", 22.6273, 120.3014},
+    {"Hsinchu", "新竹", 24.8138, 120.9675},
+    {"Keelung", "基隆", 25.1276, 121.7392},
+    {"Chiayi", "嘉义", 23.4801, 120.4491},
+};
+static const mosaic_settings_city_t s_prov_hong_kong[] = {
+    {"Hong Kong", "香港", 22.3193, 114.1694},
+};
+static const mosaic_settings_city_t s_prov_macau[] = {
+    {"Macau", "澳门", 22.1987, 113.5439},
+};
+static const mosaic_settings_city_t s_prov_international[] = {
+    {"Hong Kong", "香港", 22.3193, 114.1694},
+    {"Tokyo", "东京", 35.6762, 139.6503},
+    {"New York", "纽约", 40.7128, -74.0060},
+    {"London", "伦敦", 51.5074, -0.1278},
+    {"Paris", "巴黎", 48.8566, 2.3522},
+    {"Sydney", "悉尼", -33.8688, 151.2093},
+};
+
+static const mosaic_settings_province_t s_weather_provinces[] = {
+    {"Beijing", "北京", s_prov_beijing, sizeof(s_prov_beijing) / sizeof(s_prov_beijing[0])},
+    {"Tianjin", "天津", s_prov_tianjin, sizeof(s_prov_tianjin) / sizeof(s_prov_tianjin[0])},
+    {"Shanghai", "上海", s_prov_shanghai, sizeof(s_prov_shanghai) / sizeof(s_prov_shanghai[0])},
+    {"Chongqing", "重庆", s_prov_chongqing, sizeof(s_prov_chongqing) / sizeof(s_prov_chongqing[0])},
+    {"Hebei", "河北", s_prov_hebei, sizeof(s_prov_hebei) / sizeof(s_prov_hebei[0])},
+    {"Shanxi", "山西", s_prov_shanxi, sizeof(s_prov_shanxi) / sizeof(s_prov_shanxi[0])},
+    {"Inner Mongolia", "内蒙古", s_prov_inner_mongolia, sizeof(s_prov_inner_mongolia) / sizeof(s_prov_inner_mongolia[0])},
+    {"Liaoning", "辽宁", s_prov_liaoning, sizeof(s_prov_liaoning) / sizeof(s_prov_liaoning[0])},
+    {"Jilin", "吉林", s_prov_jilin, sizeof(s_prov_jilin) / sizeof(s_prov_jilin[0])},
+    {"Heilongjiang", "黑龙江", s_prov_heilongjiang, sizeof(s_prov_heilongjiang) / sizeof(s_prov_heilongjiang[0])},
+    {"Jiangsu", "江苏", s_prov_jiangsu, sizeof(s_prov_jiangsu) / sizeof(s_prov_jiangsu[0])},
+    {"Zhejiang", "浙江", s_prov_zhejiang, sizeof(s_prov_zhejiang) / sizeof(s_prov_zhejiang[0])},
+    {"Anhui", "安徽", s_prov_anhui, sizeof(s_prov_anhui) / sizeof(s_prov_anhui[0])},
+    {"Fujian", "福建", s_prov_fujian, sizeof(s_prov_fujian) / sizeof(s_prov_fujian[0])},
+    {"Jiangxi", "江西", s_prov_jiangxi, sizeof(s_prov_jiangxi) / sizeof(s_prov_jiangxi[0])},
+    {"Shandong", "山东", s_prov_shandong, sizeof(s_prov_shandong) / sizeof(s_prov_shandong[0])},
+    {"Henan", "河南", s_prov_henan, sizeof(s_prov_henan) / sizeof(s_prov_henan[0])},
+    {"Hubei", "湖北", s_prov_hubei, sizeof(s_prov_hubei) / sizeof(s_prov_hubei[0])},
+    {"Hunan", "湖南", s_prov_hunan, sizeof(s_prov_hunan) / sizeof(s_prov_hunan[0])},
+    {"Guangdong", "广东", s_prov_guangdong, sizeof(s_prov_guangdong) / sizeof(s_prov_guangdong[0])},
+    {"Guangxi", "广西", s_prov_guangxi, sizeof(s_prov_guangxi) / sizeof(s_prov_guangxi[0])},
+    {"Hainan", "海南", s_prov_hainan, sizeof(s_prov_hainan) / sizeof(s_prov_hainan[0])},
+    {"Sichuan", "四川", s_prov_sichuan, sizeof(s_prov_sichuan) / sizeof(s_prov_sichuan[0])},
+    {"Guizhou", "贵州", s_prov_guizhou, sizeof(s_prov_guizhou) / sizeof(s_prov_guizhou[0])},
+    {"Yunnan", "云南", s_prov_yunnan, sizeof(s_prov_yunnan) / sizeof(s_prov_yunnan[0])},
+    {"Tibet", "西藏", s_prov_tibet, sizeof(s_prov_tibet) / sizeof(s_prov_tibet[0])},
+    {"Shaanxi", "陕西", s_prov_shaanxi, sizeof(s_prov_shaanxi) / sizeof(s_prov_shaanxi[0])},
+    {"Gansu", "甘肃", s_prov_gansu, sizeof(s_prov_gansu) / sizeof(s_prov_gansu[0])},
+    {"Qinghai", "青海", s_prov_qinghai, sizeof(s_prov_qinghai) / sizeof(s_prov_qinghai[0])},
+    {"Ningxia", "宁夏", s_prov_ningxia, sizeof(s_prov_ningxia) / sizeof(s_prov_ningxia[0])},
+    {"Xinjiang", "新疆", s_prov_xinjiang, sizeof(s_prov_xinjiang) / sizeof(s_prov_xinjiang[0])},
+    {"Taiwan", "台湾", s_prov_taiwan, sizeof(s_prov_taiwan) / sizeof(s_prov_taiwan[0])},
+    {"Hong Kong", "香港", s_prov_hong_kong, sizeof(s_prov_hong_kong) / sizeof(s_prov_hong_kong[0])},
+    {"Macau", "澳门", s_prov_macau, sizeof(s_prov_macau) / sizeof(s_prov_macau[0])},
+    {"International", "国际", s_prov_international, sizeof(s_prov_international) / sizeof(s_prov_international[0])},
+};
+
+size_t mosaic_settings_province_count(void)
+{
+    return sizeof(s_weather_provinces) / sizeof(s_weather_provinces[0]);
+}
+
+const mosaic_settings_province_t *mosaic_settings_province(size_t index)
+{
+    if (index >= mosaic_settings_province_count()) {
+        return NULL;
+    }
+    return &s_weather_provinces[index];
+}
+
+size_t mosaic_settings_city_count(void)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < mosaic_settings_province_count(); ++i) {
+        count += s_weather_provinces[i].city_count;
+    }
+    return count;
+}
+
+const mosaic_settings_city_t *mosaic_settings_city(size_t index)
+{
+    for (size_t i = 0; i < mosaic_settings_province_count(); ++i) {
+        const mosaic_settings_province_t *province = &s_weather_provinces[i];
+        if (index < province->city_count) {
+            return &province->cities[index];
+        }
+        index -= province->city_count;
+    }
+    return NULL;
+}
+
+esp_err_t mosaic_settings_set_weather_city(int city_index)
+{
+    if (s_state.ops.set_weather_city == NULL) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    return s_state.ops.set_weather_city(s_state.ops.user_ctx, city_index);
 }
 
 esp_err_t mosaic_settings_factory_reset(void)
@@ -706,6 +1193,33 @@ esp_err_t mosaic_settings_unsubscribe_wifi(mosaic_wifi_event_cb_t cb,
     return ESP_ERR_NOT_FOUND;
 }
 
+/* Screen-off choices shown in the Display picker drawer, ordered to match the
+ * timeout_options_ms table in the SCREEN_TIMEOUT_SELECT handler. */
+static const char *const s_timeout_names_en[] = {
+    "10 sec", "30 sec", "1 min", "2 min", "5 min", "Never",
+};
+static const char *const s_timeout_names_zh[] = {
+    "10 秒", "30 秒", "1 分钟", "2 分钟", "5 分钟", "从不",
+};
+
+static void settings_apply_screen_timeout_texts(esp_gsp_handle_t ui,
+                                                uint32_t selected)
+{
+    const char *const *names = mosaic_i18n_is_chinese()
+        ? s_timeout_names_zh : s_timeout_names_en;
+    if (selected >= 6U) {
+        selected = 1U;
+    }
+    (void)gsp_settings_settings_screen_timeout_option_0_set_text(ui, names[0]);
+    (void)gsp_settings_settings_screen_timeout_option_1_set_text(ui, names[1]);
+    (void)gsp_settings_settings_screen_timeout_option_2_set_text(ui, names[2]);
+    (void)gsp_settings_settings_screen_timeout_option_3_set_text(ui, names[3]);
+    (void)gsp_settings_settings_screen_timeout_option_4_set_text(ui, names[4]);
+    (void)gsp_settings_settings_screen_timeout_option_5_set_text(ui, names[5]);
+    (void)gsp_settings_settings_screen_timeout_value_set_text(ui,
+                                                              names[selected]);
+}
+
 static esp_err_t settings_display_render(esp_gsp_handle_t ui)
 {
     char value[8];
@@ -733,9 +1247,9 @@ static esp_err_t settings_display_render(esp_gsp_handle_t ui)
         err =
         gsp_settings_settings_brightness_value_set_text(ui, value);
     }
-    if (err == ESP_GSP_OK) {
-        err = gsp_settings_settings_screen_timeout_dropdown_set_selected(ui, timeout_index);
-    }
+    /* The screen-off picker is a Drawer of labels, so both the six choices and
+     * the summary value are re-texted here in the active language. */
+    settings_apply_screen_timeout_texts(ui, timeout_index);
     if (err == ESP_GSP_OK) {
         (void)snprintf(value, sizeof(value), "%" PRId32 "%%",
                        s_state.volume);
@@ -805,16 +1319,19 @@ static void settings_display_render_timer_cb(
                 esp_err_t err = mosaic_settings_factory_reset();
                 if (err == ESP_OK) {
                     (void)mosaic_top_notice_show(
-                        ui, &s_top_notice, "Erase Started",
-                        "Restarting to finish reset",
+                        ui, &s_top_notice,
+                        TR("Erase Started", "开始清除"),
+                        TR("Restarting to finish reset", "重启以完成恢复"),
                         SETTINGS_NOTICE_DURATION_MS);
                 } else {
                     s_state.factory_hold_completed = false;
                     (void)gsp_settings_settings_factory_hold_progress_set_value(
                         ui, 0);
                     (void)mosaic_top_notice_show(
-                        ui, &s_top_notice, "Reset Failed",
-                        "Please try again", SETTINGS_NOTICE_DURATION_MS);
+                        ui, &s_top_notice,
+                        TR("Reset Failed", "恢复失败"),
+                        TR("Please try again", "请重试"),
+                        SETTINGS_NOTICE_DURATION_MS);
                 }
             }
         }
@@ -832,6 +1349,7 @@ static void settings_display_render_timer_cb(
 
 typedef struct {
     const char *title;
+    const char *title_zh;
     const char *value;
     bool ok;
     bool danger;
@@ -839,26 +1357,136 @@ typedef struct {
 } settings_detail_row_t;
 
 static const settings_detail_row_t s_about_rows[] = {
-    {"Model", "ESP-MOSAICO", false, false, false},
-    {"Software", "--", false, false, false},
-    {"GSP", "--", false, false, false},
-    {"Display", "2.16\" 480×480", false, false, false},
-    {"Serial", "--", false, false, false},
-    {"Update", "", false, true, true},
+    {"Model", "型号", "ESP-MOSAICO", false, false, false},
+    {"Software", "软件版本", "--", false, false, false},
+    {"GSP", "GSP", "--", false, false, false},
+    {"Display", "显示", "2.16\" 480×480", false, false, false},
+    {"Serial", "序列号", "--", false, false, false},
+    {"Update", "更新", "", false, true, true},
 };
 
 static const settings_detail_row_t s_safe_rows[] = {
-    {"Third-Party Skills", "Disabled", false, false, false},
-    {"Network", "Wi-Fi Only", false, false, false},
-    {"Accessories", "Read Only", false, false, false},
-    {"Exit Safe Mode", "Restart", false, true, true},
+    {"Third-Party Skills", "第三方技能", "Disabled", false, false, false},
+    {"Network", "网络", "Wi-Fi Only", false, false, false},
+    {"Accessories", "配件", "Read Only", false, false, false},
+    {"Exit Safe Mode", "退出安全模式", "Restart", false, true, true},
 };
 
 static const settings_detail_row_t s_battery_rows[] = {
-    {"Charge", "--", false, false, false},
-    {"Voltage", "--", false, false, false},
-    {"Current", "--", false, false, false},
+    {"Charge", "充电", "--", false, false, false},
+    {"Voltage", "电压", "--", false, false, false},
+    {"Current", "电流", "--", false, false, false},
 };
+
+/* Language names are shown natively; the value column marks the active one. */
+static const settings_detail_row_t s_language_rows[] = {
+    {"English", "English", "", false, false, false},
+    {"中文",    "中文",    "", false, false, false},
+};
+
+/* Location rows are built in two levels: a province list ("Auto (IP)" plus
+ * one row per province) and, once a province is entered, its city list. */
+#define SETTINGS_CITY_ROW_MAX 48U
+static settings_detail_row_t s_city_rows[SETTINGS_CITY_ROW_MAX];
+static size_t s_city_row_count;
+/* -1 shows the province list; >= 0 is the entered province's city list. */
+static int s_city_province = -1;
+
+static size_t settings_province_city_base(size_t province_index)
+{
+    size_t base = 0;
+    for (size_t i = 0; i < province_index; ++i) {
+        const mosaic_settings_province_t *province =
+            mosaic_settings_province(i);
+        if (province != NULL) {
+            base += province->city_count;
+        }
+    }
+    return base;
+}
+
+static void settings_city_rows_build(void)
+{
+    size_t index = 0;
+    const int active = s_state.snapshot.weather_city_index;
+    if (s_city_province >= 0) {
+        const mosaic_settings_province_t *province =
+            mosaic_settings_province((size_t)s_city_province);
+        if (province == NULL) {
+            const char *auto_name = TR("Auto (IP)", "自动 (IP)");
+            s_city_rows[index++] =
+                (settings_detail_row_t){auto_name, auto_name, "",
+                                        false, false, false};
+            s_city_row_count = index;
+            return;
+        }
+        const size_t base = settings_province_city_base((size_t)s_city_province);
+        for (size_t i = 0; i < province->city_count &&
+                index < SETTINGS_CITY_ROW_MAX; ++i) {
+            const bool selected = ((int)(base + i) == active);
+            const char *city_name = TR(province->cities[i].name,
+                                       province->cities[i].name_zh);
+            s_city_rows[index] = (settings_detail_row_t){
+                city_name, city_name,
+                selected ? "✓" : "",
+                selected, false, false};
+            ++index;
+        }
+        s_city_row_count = index;
+        return;
+    }
+    const bool auto_selected = active < 0;
+    {
+        const char *auto_name = TR("Auto (IP)", "自动 (IP)");
+        s_city_rows[index++] = (settings_detail_row_t){
+            auto_name, auto_name, auto_selected ? "✓" : "",
+            auto_selected, false, false};
+    }
+    const size_t province_count = mosaic_settings_province_count();
+    for (size_t p = 0; p < province_count && index < SETTINGS_CITY_ROW_MAX; ++p) {
+        const mosaic_settings_province_t *province =
+            mosaic_settings_province(p);
+        if (province == NULL) {
+            continue;
+        }
+        const size_t base = settings_province_city_base(p);
+        const char *value = "";
+        bool ok = false;
+        if (active >= 0 && (size_t)active >= base &&
+                (size_t)active < base + province->city_count) {
+            const mosaic_settings_city_t *selected_city =
+                &province->cities[(size_t)active - base];
+            value = TR(selected_city->name, selected_city->name_zh);
+            ok = true;
+        }
+        const char *province_name = TR(province->name, province->name_zh);
+        s_city_rows[index] = (settings_detail_row_t){
+            province_name, province_name, value, ok, false, true};
+        ++index;
+    }
+    s_city_row_count = index;
+}
+
+/* Values that need a Chinese form; anything unlisted (version strings, units,
+ * "--", or text already localized before use) is returned unchanged. */
+static const char *settings_detail_value_zh(const char *value)
+{
+    if (value == NULL || !mosaic_i18n_is_chinese()) {
+        return value;
+    }
+    static const struct { const char *en; const char *zh; } k_values[] = {
+        {"Disabled", "已禁用"},
+        {"Wi-Fi Only", "仅 Wi-Fi"},
+        {"Read Only", "只读"},
+        {"Restart", "重启"},
+    };
+    for (size_t i = 0; i < sizeof(k_values) / sizeof(k_values[0]); ++i) {
+        if (strcmp(value, k_values[i].en) == 0) {
+            return k_values[i].zh;
+        }
+    }
+    return value;
+}
 
 static const settings_detail_row_t *settings_detail_rows(size_t *count)
 {
@@ -869,6 +1497,15 @@ static const settings_detail_row_t *settings_detail_rows(size_t *count)
     case SETTINGS_DETAIL_BATTERY:
         *count = sizeof(s_battery_rows) / sizeof(s_battery_rows[0]);
         return s_battery_rows;
+    case SETTINGS_DETAIL_LANGUAGE:
+        *count = sizeof(s_language_rows) / sizeof(s_language_rows[0]);
+        return s_language_rows;
+    case SETTINGS_DETAIL_CITY:
+        if (s_city_row_count == 0U) {
+            settings_city_rows_build();
+        }
+        *count = s_city_row_count;
+        return s_city_rows;
     case SETTINGS_DETAIL_ABOUT:
     default:
         *count = sizeof(s_about_rows) / sizeof(s_about_rows[0]);
@@ -888,7 +1525,7 @@ static gsp_err_t settings_detail_bind_item(
     }
     const settings_detail_row_t *item = &rows[item_index];
     char value_text[64];
-    const char *value = item->value;
+    const char *value = settings_detail_value_zh(item->value);
     if (s_detail_kind == SETTINGS_DETAIL_ABOUT) {
         switch (item_index) {
         case 1:
@@ -907,27 +1544,34 @@ static gsp_err_t settings_detail_bind_item(
         case 5:
             switch (s_state.snapshot.update.state) {
             case MOSAIC_SETTINGS_UPDATE_CHECKING:
-                value = "Checking...";
+                value = TR("Checking...", "检查中...");
                 break;
             case MOSAIC_SETTINGS_UPDATE_UP_TO_DATE:
-                value = "Up to date";
+                value = TR("Up to date", "已是最新");
                 break;
             case MOSAIC_SETTINGS_UPDATE_AVAILABLE:
                 if (s_state.snapshot.update.latest_version[0] != '\0') {
-                    (void)snprintf(value_text, sizeof(value_text), "v%s available",
-                                   s_state.snapshot.update.latest_version);
+                    if (mosaic_i18n_is_chinese()) {
+                        (void)snprintf(value_text, sizeof(value_text),
+                                       "%s 可更新",
+                                       s_state.snapshot.update.latest_version);
+                    } else {
+                        (void)snprintf(value_text, sizeof(value_text),
+                                       "v%s available",
+                                       s_state.snapshot.update.latest_version);
+                    }
                     value = value_text;
                 }
                 break;
             case MOSAIC_SETTINGS_UPDATE_DEVICE_AHEAD:
-                value = "Device is newer";
+                value = TR("Device is newer", "设备版本更新");
                 break;
             case MOSAIC_SETTINGS_UPDATE_FAILED:
-                value = "Check failed";
+                value = TR("Check failed", "检查失败");
                 break;
             case MOSAIC_SETTINGS_UPDATE_IDLE:
             default:
-                value = "Check now";
+                value = TR("Check now", "立即检查");
                 break;
             }
             break;
@@ -956,9 +1600,12 @@ static gsp_err_t settings_detail_bind_item(
         default:
             break;
         }
+    } else if (s_detail_kind == SETTINGS_DETAIL_LANGUAGE) {
+        const bool active = (item_index == 0U) != mosaic_i18n_is_chinese();
+        value = active ? "✓" : "";
     }
     esp_gsp_err_t err = gsp_settings_settings_detail_row_row_set_title_text(
-        ui, row, item->title);
+        ui, row, TR(item->title, item->title_zh));
     if (err == ESP_GSP_OK) {
         err = gsp_settings_settings_detail_row_row_set_title_fg_color(
             ui, row, item->danger ? SETTINGS_TOGGLE_ON_COLOR
@@ -991,12 +1638,19 @@ static void settings_detail_list_attach(esp_gsp_handle_t ui)
 static void settings_open_detail(esp_gsp_handle_t ui,
                                  settings_detail_kind_t kind)
 {
-    static const char *titles[] = {"About", "Safe Mode", "Battery"};
+    static const char *titles[] = {"About", "Safe Mode", "Battery", "Language", "Location"};
+    static const char *titles_zh[] = {"关于", "安全模式", "电池", "语言", "城市定位"};
     s_detail_kind = kind;
+    if (kind == SETTINGS_DETAIL_CITY) {
+        /* Always re-enter at the province list level. */
+        s_city_province = -1;
+        settings_city_rows_build();
+    }
     size_t count = 0;
     (void)settings_detail_rows(&count);
     settings_detail_list_attach(ui);
-    (void)gsp_settings_nav_settings_detail_title_set_text(ui, titles[kind]);
+    (void)gsp_settings_nav_settings_detail_title_set_text(
+        ui, TR(titles[kind], titles_zh[kind]));
     (void)esp_gsp_list_set_total(ui, s_detail_list, count);
     (void)esp_gsp_list_refresh(ui, s_detail_list);
     (void)esp_gsp_list_scroll_to(ui, s_detail_list, 0);
@@ -1006,55 +1660,84 @@ static void settings_open_detail(esp_gsp_handle_t ui,
     }
 }
 
+/* Rebuild and refresh the Location detail list for the current level
+ * (province list when s_city_province < 0, otherwise that province's cities),
+ * updating the detail page title to match. */
+static void settings_city_render_list(esp_gsp_handle_t ui)
+{
+    settings_city_rows_build();
+    settings_detail_list_attach(ui);
+    const char *title = TR("Location", "城市定位");
+    if (s_city_province >= 0) {
+        const mosaic_settings_province_t *province =
+            mosaic_settings_province((size_t)s_city_province);
+        if (province != NULL) {
+            title = TR(province->name, province->name_zh);
+        }
+    }
+    (void)gsp_settings_nav_settings_detail_title_set_text(ui, title);
+    (void)esp_gsp_list_set_total(ui, s_detail_list, s_city_row_count);
+    (void)esp_gsp_list_refresh(ui, s_detail_list);
+}
+
 typedef struct {
     const char *title;
+    const char *title_zh;
     const uint8_t *icon;
     size_t icon_size;
 } settings_root_row_t;
 
-#define SETTINGS_ROOT_ROW(_title, _name) { \
+#define SETTINGS_ROOT_ROW(_title, _title_zh, _name) { \
     .title = (_title), \
+    .title_zh = (_title_zh), \
     .icon = settings_root_icon_##_name, \
     .icon_size = sizeof(settings_root_icon_##_name), \
 }
 
 static const settings_root_row_t s_root_rows[] = {
-    SETTINGS_ROOT_ROW("AI Model", ai),
-    SETTINGS_ROOT_ROW("IM Channels", channels),
-    SETTINGS_ROOT_ROW("Network", network),
-    SETTINGS_ROOT_ROW("Display", display),
-    SETTINGS_ROOT_ROW("Sound", sound),
-    SETTINGS_ROOT_ROW("Security", security),
-    SETTINGS_ROOT_ROW("Battery", battery),
-    SETTINGS_ROOT_ROW("Debug", debug),
-    SETTINGS_ROOT_ROW("About", about),
+    SETTINGS_ROOT_ROW("AI Model", "AI 模型", ai),
+    SETTINGS_ROOT_ROW("IM Channels", "IM 通道", channels),
+    SETTINGS_ROOT_ROW("Network", "网络", network),
+    SETTINGS_ROOT_ROW("Display", "显示", display),
+    SETTINGS_ROOT_ROW("Sound", "声音", sound),
+    SETTINGS_ROOT_ROW("Security", "安全", security),
+    SETTINGS_ROOT_ROW("Battery", "电池", battery),
+    SETTINGS_ROOT_ROW("Location", "城市定位", location),
+    SETTINGS_ROOT_ROW("Language", "语言", language),
+    SETTINGS_ROOT_ROW("Debug", "调试", debug),
+    SETTINGS_ROOT_ROW("About", "关于", about),
 };
+
+#define SETTINGS_ROOT_LOCATION_INDEX 7U
+#define SETTINGS_ROOT_LANGUAGE_INDEX 8U
+#define SETTINGS_ROOT_DEBUG_INDEX 9U
+#define SETTINGS_ROOT_ABOUT_INDEX 10U
 
 static const char *settings_wlan_summary(void)
 {
     const settings_wlan_state_t *wlan = &s_state.wlan;
     if (!wlan->enabled || wlan->state == MOSAIC_SETTINGS_WIFI_DISABLED) {
-        return "Off";
+        return TR("Off", "已关闭");
     }
     if (wlan->state == MOSAIC_SETTINGS_WIFI_SCANNING) {
-        return "Scanning";
+        return TR("Scanning", "扫描中");
     }
     if (wlan->state == MOSAIC_SETTINGS_WIFI_CONNECTING) {
-        return "Connecting";
+        return TR("Connecting", "连接中");
     }
     if (wlan->state == MOSAIC_SETTINGS_WIFI_AUTH_FAILED) {
-        return "Wrong password";
+        return TR("Wrong password", "密码错误");
     }
     if (wlan->state == MOSAIC_SETTINGS_WIFI_AP_NOT_FOUND) {
-        return "Not found";
+        return TR("Not found", "未找到");
     }
     if (wlan->state == MOSAIC_SETTINGS_WIFI_RETRY_WAIT) {
-        return "Retrying";
+        return TR("Retrying", "重试中");
     }
     if (wlan->connected && wlan->current_ssid[0] != '\0') {
         return wlan->current_ssid;
     }
-    return "Offline";
+    return TR("Offline", "离线");
 }
 
 static bool settings_llm_is_bound(void)
@@ -1082,10 +1765,12 @@ static gsp_err_t settings_root_list_bind_item(
     const char *value_text = value;
     switch (item_index) {
     case 0:
-        value_text = settings_llm_is_bound() ? "Bound" : "Unbound";
+        value_text = settings_llm_is_bound() ? TR("Bound", "已绑定")
+                                             : TR("Unbound", "未绑定");
         break;
     case 1:
-        value_text = settings_any_im_is_bound() ? "Bound" : "Unbound";
+        value_text = settings_any_im_is_bound() ? TR("Bound", "已绑定")
+                                                : TR("Unbound", "未绑定");
         break;
     case 2:
         value_text = settings_wlan_summary();
@@ -1106,6 +1791,18 @@ static gsp_err_t settings_root_list_bind_item(
             value_text = "--";
         }
         break;
+    case SETTINGS_ROOT_LOCATION_INDEX: {
+        const mosaic_settings_city_t *city =
+            s_state.snapshot.weather_city_index >= 0
+                ? mosaic_settings_city((size_t)s_state.snapshot.weather_city_index)
+                : NULL;
+        value_text = city != NULL ? TR(city->name, city->name_zh)
+                                  : TR("Auto", "自动");
+        break;
+    }
+    case SETTINGS_ROOT_LANGUAGE_INDEX:
+        value_text = mosaic_i18n_is_chinese() ? "中文" : "English";
+        break;
     default:
         break;
     }
@@ -1115,7 +1812,8 @@ static gsp_err_t settings_root_list_bind_item(
             s_root_rows[item_index].icon_size);
     if (err == ESP_GSP_OK) {
         err = gsp_settings_settings_root_row_row_set_title_text(
-            ui, row, s_root_rows[item_index].title);
+            ui, row, TR(s_root_rows[item_index].title,
+                        s_root_rows[item_index].title_zh));
     }
     if (err == ESP_GSP_OK) {
         err = gsp_settings_settings_root_row_row_set_value_text(
@@ -1408,36 +2106,36 @@ static esp_err_t settings_wlan_render(esp_gsp_handle_t ui)
     const mosaic_settings_network_t *network = &s_state.snapshot.network;
     const bool page_enabled = s_state.wlan_page_active && wlan->enabled;
     const bool show_current = settings_wlan_show_current();
-    const char *status = "Not Connected";
+    const char *status = TR("Not Connected", "未连接");
     if (s_state.wlan_connect_pending && !wlan->connected) {
         /* Provider setup can briefly publish IDLE while credentials are
          * persisted and the STA is restarted. Keep the user-facing operation
          * in Joining until a terminal success/failure event arrives. */
-        status = "Joining...";
+        status = TR("Joining...", "加入中...");
     } else switch (wlan->state) {
     case MOSAIC_SETTINGS_WIFI_CONNECTING:
-        status = "Joining...";
+        status = TR("Joining...", "加入中...");
         break;
     case MOSAIC_SETTINGS_WIFI_CONNECTED:
-        status = "Current Network";
+        status = TR("Current Network", "当前网络");
         break;
     case MOSAIC_SETTINGS_WIFI_RETRY_WAIT:
-        status = "Waiting to reconnect";
+        status = TR("Waiting to reconnect", "等待重新连接");
         break;
     case MOSAIC_SETTINGS_WIFI_AUTH_FAILED:
-        status = "Incorrect password";
+        status = TR("Incorrect password", "密码错误");
         break;
     case MOSAIC_SETTINGS_WIFI_AP_NOT_FOUND:
-        status = "Network not found";
+        status = TR("Network not found", "未找到网络");
         break;
     case MOSAIC_SETTINGS_WIFI_FAILED:
-        status = "Connection failed";
+        status = TR("Connection failed", "连接失败");
         break;
     default:
         break;
     }
     esp_err_t result = ESP_OK;
-    const char *mode = "Off";
+    const char *mode = TR("Off", "关");
     if (strcmp(network->mode, "provision") == 0) {
         mode = "AP";
     } else if (strcmp(network->mode, "apsta") == 0) {
@@ -1447,9 +2145,19 @@ static esp_err_t settings_wlan_render(esp_gsp_handle_t ui)
     }
     char mode_info[64];
     if (network->ap_active && network->ap_ssid[0] != '\0') {
-        (void)snprintf(mode_info, sizeof(mode_info), "Mode: %s · AP: %s", mode, network->ap_ssid);
+        if (mosaic_i18n_is_chinese()) {
+            (void)snprintf(mode_info, sizeof(mode_info), "模式：%s · AP：%s",
+                           mode, network->ap_ssid);
+        } else {
+            (void)snprintf(mode_info, sizeof(mode_info), "Mode: %s · AP: %s",
+                           mode, network->ap_ssid);
+        }
     } else {
-        (void)snprintf(mode_info, sizeof(mode_info), "Mode: %s", mode);
+        if (mosaic_i18n_is_chinese()) {
+            (void)snprintf(mode_info, sizeof(mode_info), "模式：%s", mode);
+        } else {
+            (void)snprintf(mode_info, sizeof(mode_info), "Mode: %s", mode);
+        }
     }
 
     keep_first_error(&result,
@@ -1498,7 +2206,8 @@ static esp_err_t settings_wlan_render(esp_gsp_handle_t ui)
                 ui, wlan->current_ssid));
     } else {
         keep_first_error(&result,
-            gsp_settings_settings_wlan_detail_ssid_set_text(ui, "Network"));
+            gsp_settings_settings_wlan_detail_ssid_set_text(
+                ui, TR("Network", "网络")));
     }
     keep_first_error(&result,
         gsp_settings_settings_wlan_auto_join_set_checked(
@@ -1614,8 +2323,8 @@ static void settings_wlan_refresh_status(esp_gsp_handle_t ui)
             }
             break;
         case MOSAIC_SETTINGS_WIFI_AUTH_FAILED:
-            title = "Incorrect password";
-            message = "Check the password and try again";
+            title = TR("Incorrect password", "密码错误");
+            message = TR("Check the password and try again", "请检查密码后重试");
             s_state.wlan_connect_pending = false;
             s_state.wlan_connect_operation_id = network.operation_id;
             if (s_state.ops.forget_wifi != NULL) {
@@ -1628,14 +2337,14 @@ static void settings_wlan_refresh_status(esp_gsp_handle_t ui)
             s_state.snapshot.network.ssid[0] = '\0';
             break;
         case MOSAIC_SETTINGS_WIFI_AP_NOT_FOUND:
-            title = "Network unavailable";
-            message = "The selected WLAN was not found";
+            title = TR("Network unavailable", "网络不可用");
+            message = TR("The selected WLAN was not found", "未找到所选 WLAN");
             s_state.wlan_connect_pending = false;
             s_state.wlan_connect_operation_id = network.operation_id;
             break;
         case MOSAIC_SETTINGS_WIFI_FAILED:
-            title = "Connection failed";
-            message = "Check the network and try again";
+            title = TR("Connection failed", "连接失败");
+            message = TR("Check the network and try again", "请检查网络后重试");
             s_state.wlan_connect_pending = false;
             s_state.wlan_connect_operation_id = network.operation_id;
             break;
@@ -1855,8 +2564,8 @@ static void settings_wlan_handle_network_select(
                 settings_wlan_refresh_status(ui);
             } else {
                 (void)mosaic_top_notice_show(
-                    ui, &s_top_notice, "Connection failed",
-                    "Unable to start the connection",
+                    ui, &s_top_notice, TR("Connection failed", "连接失败"),
+                    TR("Unable to start the connection", "无法启动连接"),
                     SETTINGS_NOTICE_DURATION_MS);
             }
         }
@@ -1891,8 +2600,8 @@ static bool settings_wlan_handle_connect(esp_gsp_handle_t ui)
     }
     if (strlen(password) < SETTINGS_WLAN_PASSWORD_MIN) {
         (void)mosaic_top_notice_show(
-            ui, &s_top_notice, "Password too short",
-            "Enter at least 8 characters",
+            ui, &s_top_notice, TR("Password too short", "密码过短"),
+            TR("Enter at least 8 characters", "至少输入 8 个字符"),
             SETTINGS_NOTICE_DURATION_MS);
         return false;
     }
@@ -1908,8 +2617,8 @@ static bool settings_wlan_handle_connect(esp_gsp_handle_t ui)
         s_state.wlan_connect_pending = false;
         ESP_LOGW(TAG, "connect WLAN %s failed", ssid);
         (void)mosaic_top_notice_show(
-            ui, &s_top_notice, "Connection failed",
-            "Unable to start the connection",
+            ui, &s_top_notice, TR("Connection failed", "连接失败"),
+            TR("Unable to start the connection", "无法启动连接"),
             SETTINGS_NOTICE_DURATION_MS);
         return false;
     }
@@ -1961,16 +2670,16 @@ static void settings_wlan_apply_phone_status(
         }
         return;
     case MOSAIC_SETTINGS_WIFI_AUTH_FAILED:
-        title = "Incorrect password";
-        message = "Update the password on your phone";
+        title = TR("Incorrect password", "密码错误");
+        message = TR("Update the password on your phone", "请在手机上更新密码");
         break;
     case MOSAIC_SETTINGS_WIFI_AP_NOT_FOUND:
-        title = "Network unavailable";
-        message = "Choose another WLAN on your phone";
+        title = TR("Network unavailable", "网络不可用");
+        message = TR("Choose another WLAN on your phone", "请在手机上选择其他 WLAN");
         break;
     case MOSAIC_SETTINGS_WIFI_FAILED:
-        title = "Connection failed";
-        message = "Check the settings and try again";
+        title = TR("Connection failed", "连接失败");
+        message = TR("Check the settings and try again", "请检查设置后重试");
         break;
     default:
         return;
@@ -1994,8 +2703,8 @@ static void settings_wlan_handle_phone_submitted(esp_gsp_handle_t ui)
         (void)settings_wlan_show_pending_notice(ui);
     } else {
         (void)mosaic_top_notice_show(
-            ui, &s_top_notice, "Waiting for phone",
-            "Submit Wi-Fi settings in the portal",
+            ui, &s_top_notice, TR("Waiting for phone", "等待手机"),
+            TR("Submit Wi-Fi settings in the portal", "请在门户中提交 Wi-Fi 设置"),
             SETTINGS_NOTICE_DURATION_MS);
     }
 }
@@ -2261,7 +2970,8 @@ static void settings_update_notes_render(esp_gsp_handle_t ui,
     settings_update_note_append_text(title, true);
     settings_update_note_append_text(summary, false);
     if (s_update_note_count == 0U) {
-        settings_update_note_append_text("No release notes available", false);
+        settings_update_note_append_text(
+            TR("No release notes available", "暂无发布说明"), false);
     }
     (void)esp_gsp_list_set_total(
         ui, s_update_notes_list, s_update_note_count);
@@ -2284,76 +2994,87 @@ static void settings_render_update_page(esp_gsp_handle_t ui)
 {
     const mosaic_settings_update_t *update = &s_state.snapshot.update;
     const char *icon = "i";
-    const char *status = "Ready to Check";
-    const char *status_detail = "Compare with the published release";
+    const char *status = TR("Ready to Check", "可以检查");
+    const char *status_detail =
+        TR("Compare with the published release", "与已发布版本比较");
     const char *status_detail_2 = "";
-    const char *latest = "Not checked";
-    const char *heading = "ABOUT UPDATE CHECKS";
-    const char *title = "Release information only";
+    const char *latest = TR("Not checked", "未检查");
+    const char *heading = TR("ABOUT UPDATE CHECKS", "关于更新检查");
+    const char *title = TR("Release information only", "仅供发布参考");
     const char *summary =
-        "Checks the latest published software version. No files are installed.";
-    const char *action = "Check Again";
+        TR("Checks the latest published software version. No files are installed.",
+           "检查已发布的最新软件版本，不会安装任何文件。");
+    const char *action = TR("Check Again", "重新检查");
     bool published_visible = false;
     switch (update->state) {
     case MOSAIC_SETTINGS_UPDATE_CHECKING:
         icon = "…";
-        status = "Checking for Updates";
-        status_detail = "Contacting the update server";
-        latest = "Checking...";
-        heading = "PLEASE WAIT";
-        title = "Fetching release information";
-        summary = "The device is reading the published version and release notes.";
-        action = "Checking...";
+        status = TR("Checking for Updates", "正在检查更新");
+        status_detail = TR("Contacting the update server", "正在连接更新服务器");
+        latest = TR("Checking...", "检查中...");
+        heading = TR("PLEASE WAIT", "请稍候");
+        title = TR("Fetching release information", "正在获取发布信息");
+        summary = TR("The device is reading the published version and release notes.",
+                     "设备正在读取已发布版本与发布说明。");
+        action = TR("Checking...", "检查中...");
         break;
     case MOSAIC_SETTINGS_UPDATE_AVAILABLE:
         icon = "^";
-        status = "Update Available";
-        status_detail = "Visit https://mosaico.espressif.com/";
-        status_detail_2 = "for updates";
+        status = TR("Update Available", "有可用更新");
+        status_detail = TR("Visit https://mosaico.espressif.com/",
+                           "访问 https://mosaico.espressif.com/");
+        status_detail_2 = TR("for updates", "获取更新");
         latest = update->latest_version[0] != '\0'
-            ? update->latest_version : "Available";
-        heading = "WHAT'S NEW";
+            ? update->latest_version : TR("Available", "可用");
+        heading = TR("WHAT'S NEW", "更新内容");
         title = update->title[0] != '\0'
-            ? update->title : "A newer version is available";
+            ? update->title : TR("A newer version is available", "有新版本可用");
         summary = update->summary[0] != '\0'
-            ? update->summary : "Review the published release information.";
+            ? update->summary : TR("Review the published release information.",
+                                   "查看已发布的版本信息。");
         published_visible = update->published_at[0] != '\0';
         break;
     case MOSAIC_SETTINGS_UPDATE_UP_TO_DATE:
         icon = "OK";
-        status = "Up to Date";
-        status_detail = "This device matches the published release";
+        status = TR("Up to Date", "已是最新");
+        status_detail = TR("This device matches the published release",
+                           "本设备与已发布版本一致");
         latest = update->latest_version[0] != '\0'
             ? update->latest_version : s_state.snapshot.software_version;
-        heading = "LATEST RELEASE";
+        heading = TR("LATEST RELEASE", "最新版本");
         title = update->title[0] != '\0'
-            ? update->title : "Your software is current";
+            ? update->title : TR("Your software is current", "软件已是最新");
         summary = update->summary[0] != '\0'
-            ? update->summary : "No newer published version was found.";
+            ? update->summary : TR("No newer published version was found.",
+                                   "未发现更新的已发布版本。");
         published_visible = update->published_at[0] != '\0';
         break;
     case MOSAIC_SETTINGS_UPDATE_DEVICE_AHEAD:
         icon = "^";
-        status = "Development Version";
-        status_detail = "This device is newer than the published release";
+        status = TR("Development Version", "开发版本");
+        status_detail = TR("This device is newer than the published release",
+                           "本设备版本比已发布版本更新");
         latest = update->latest_version[0] != '\0'
-            ? update->latest_version : "Unavailable";
-        heading = "PUBLISHED RELEASE";
-        title = "Device version is newer";
+            ? update->latest_version : TR("Unavailable", "不可用");
+        heading = TR("PUBLISHED RELEASE", "已发布版本");
+        title = TR("Device version is newer", "设备版本更新");
         summary = update->summary[0] != '\0'
-            ? update->summary : "This device is ahead of the published release.";
+            ? update->summary : TR("This device is ahead of the published release.",
+                                   "本设备领先于已发布版本。");
         published_visible = update->published_at[0] != '\0';
         break;
     case MOSAIC_SETTINGS_UPDATE_FAILED:
         icon = "!";
-        status = "Check Failed";
-        status_detail = "The update manifest could not be loaded";
-        latest = "Unavailable";
-        heading = "NEXT STEP";
+        status = TR("Check Failed", "检查失败");
+        status_detail = TR("The update manifest could not be loaded",
+                           "无法加载更新清单");
+        latest = TR("Unavailable", "不可用");
+        heading = TR("NEXT STEP", "下一步");
         title = update->title[0] != '\0' ? update->title
-            : "Check the network and update source";
+            : TR("Check the network and update source", "检查网络与更新源");
         summary = update->summary[0] != '\0' ? update->summary
-            : "Confirm the connection and manifest URL, then try again.";
+            : TR("Confirm the connection and manifest URL, then try again.",
+                 "确认网络连接与清单网址后重试。");
         break;
     case MOSAIC_SETTINGS_UPDATE_IDLE:
     default:
@@ -2362,11 +3083,11 @@ static void settings_render_update_page(esp_gsp_handle_t ui)
 
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_BACK, "‹");
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_NAV_TITLE,
-                           "Software Update");
+                           TR("Software Update", "软件更新"));
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_CURRENT_LABEL,
-                           "CURRENT");
+                           TR("CURRENT", "当前"));
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_LATEST_LABEL,
-                           "PUBLISHED");
+                           TR("PUBLISHED", "已发布"));
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_ARROW, ">");
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_ICON, icon);
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS, status);
@@ -2394,7 +3115,8 @@ static void settings_render_update_page(esp_gsp_handle_t ui)
     (void)esp_gsp_set_visible(ui, GSP_BIND_SETTINGS_UPDATE_PUBLISHED_VISIBLE,
                               published_visible);
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_DISCLAIMER,
-                           "Information only · No automatic installation");
+                           TR("Information only · No automatic installation",
+                              "仅供参考 · 不自动安装"));
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_ACTION, action);
     /* Text updates clear their previous bounds. Re-submit the retained card
      * fills so the compositor redraws each complete card behind new text. */
@@ -2412,11 +3134,11 @@ static void settings_render_update_error(esp_gsp_handle_t ui,
 {
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_BACK, "‹");
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_NAV_TITLE,
-                           "Software Update");
+                           TR("Software Update", "软件更新"));
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_CURRENT_LABEL,
-                           "CURRENT");
+                           TR("CURRENT", "当前"));
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_LATEST_LABEL,
-                           "PUBLISHED");
+                           TR("PUBLISHED", "已发布"));
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_ARROW, ">");
     (void)esp_gsp_set_text(
         ui, GSP_BIND_SETTINGS_UPDATE_CURRENT_VERSION,
@@ -2427,15 +3149,18 @@ static void settings_render_update_error(esp_gsp_handle_t ui,
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_DETAIL, detail);
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_DETAIL_2, "");
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_LATEST_VERSION,
-                           "Unavailable");
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_HEADING, "NEXT STEP");
+                           TR("Unavailable", "不可用"));
+    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_HEADING,
+                           TR("NEXT STEP", "下一步"));
     settings_update_notes_render(ui, title, message);
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_PUBLISHED_AT, "");
     (void)esp_gsp_set_visible(ui, GSP_BIND_SETTINGS_UPDATE_PUBLISHED_VISIBLE,
                               false);
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_DISCLAIMER,
-                           "Information only · No automatic installation");
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_ACTION, "Try Again");
+                           TR("Information only · No automatic installation",
+                              "仅供参考 · 不自动安装"));
+    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_ACTION,
+                           TR("Try Again", "重试"));
     (void)esp_gsp_set_color(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_CARD_COLOR,
                             SETTINGS_LEVEL_OFF_COLOR);
     (void)esp_gsp_set_color(ui, GSP_BIND_SETTINGS_UPDATE_ACTION_CARD_COLOR,
@@ -2450,19 +3175,23 @@ static void settings_start_update_check(esp_gsp_handle_t ui)
     }
     if (!s_state.snapshot.network.connected) {
         settings_render_update_error(
-            ui, "Unable to Check", "No internet connection",
-            "Connect to Wi-Fi",
-            "A network connection is required to check the published version.");
+            ui, TR("Unable to Check", "无法检查"),
+            TR("No internet connection", "无网络连接"),
+            TR("Connect to Wi-Fi", "连接 Wi-Fi"),
+            TR("A network connection is required to check the published version.",
+               "检查已发布版本需要网络连接。"));
         return;
     }
     const esp_err_t err = mosaic_settings_request_update_check();
     if (err != ESP_OK) {
         settings_render_update_error(
-            ui, "Check Unavailable", "Update source is not configured",
-            "Configure the update source",
+            ui, TR("Check Unavailable", "检查不可用"),
+            TR("Update source is not configured", "未配置更新源"),
+            TR("Configure the update source", "配置更新源"),
             err == ESP_ERR_NOT_SUPPORTED
-                ? "Configure APP_UPDATE_MANIFEST_URL first."
-                : "Unable to start the update check.");
+                ? TR("Configure APP_UPDATE_MANIFEST_URL first.",
+                     "请先配置 APP_UPDATE_MANIFEST_URL。")
+                : TR("Unable to start the update check.", "无法启动更新检查。"));
         return;
     }
     s_state.snapshot.update.state = MOSAIC_SETTINGS_UPDATE_CHECKING;
@@ -2481,7 +3210,8 @@ static void settings_open_update_page(esp_gsp_handle_t ui)
             SETTINGS_UPDATE_PAGE, true) != ESP_GSP_OK) {
         s_state.update_page_active = false;
         (void)mosaic_top_notice_show(
-            ui, &s_top_notice, "Software Update", "Unable to open page",
+            ui, &s_top_notice, TR("Software Update", "软件更新"),
+            TR("Unable to open page", "无法打开页面"),
             SETTINGS_NOTICE_DURATION_MS);
         return;
     }
@@ -2528,12 +3258,19 @@ static void settings_show_update_result(esp_gsp_handle_t ui)
     case MOSAIC_SETTINGS_UPDATE_AVAILABLE:
         if (update->title[0] != '\0') {
             strlcpy(title, update->title, sizeof(title));
+        } else if (mosaic_i18n_is_chinese()) {
+            (void)snprintf(title, sizeof(title), "版本 %s 可用",
+                           update->latest_version);
         } else {
             (void)snprintf(title, sizeof(title), "Version %s available",
                            update->latest_version);
         }
         if (update->summary[0] != '\0') {
             strlcpy(message, update->summary, sizeof(message));
+        } else if (mosaic_i18n_is_chinese()) {
+            (void)snprintf(message, sizeof(message), "当前 %s · 最新 %s",
+                           s_state.snapshot.software_version,
+                           update->latest_version);
         } else {
             (void)snprintf(message, sizeof(message), "Current %s · Latest %s",
                            s_state.snapshot.software_version,
@@ -2541,20 +3278,33 @@ static void settings_show_update_result(esp_gsp_handle_t ui)
         }
         break;
     case MOSAIC_SETTINGS_UPDATE_UP_TO_DATE:
-        strlcpy(title, "Up to Date", sizeof(title));
-        (void)snprintf(message, sizeof(message), "Version %s is current",
-                       s_state.snapshot.software_version);
+        strlcpy(title, TR("Up to Date", "已是最新"), sizeof(title));
+        if (mosaic_i18n_is_chinese()) {
+            (void)snprintf(message, sizeof(message), "版本 %s 已是最新",
+                           s_state.snapshot.software_version);
+        } else {
+            (void)snprintf(message, sizeof(message), "Version %s is current",
+                           s_state.snapshot.software_version);
+        }
         break;
     case MOSAIC_SETTINGS_UPDATE_DEVICE_AHEAD:
-        strlcpy(title, "Development Version", sizeof(title));
-        (void)snprintf(message, sizeof(message), "Device %s · Published %s",
-                       s_state.snapshot.software_version,
-                       update->latest_version);
+        strlcpy(title, TR("Development Version", "开发版本"), sizeof(title));
+        if (mosaic_i18n_is_chinese()) {
+            (void)snprintf(message, sizeof(message), "设备 %s · 已发布 %s",
+                           s_state.snapshot.software_version,
+                           update->latest_version);
+        } else {
+            (void)snprintf(message, sizeof(message), "Device %s · Published %s",
+                           s_state.snapshot.software_version,
+                           update->latest_version);
+        }
         break;
     case MOSAIC_SETTINGS_UPDATE_FAILED:
     default:
-        strlcpy(title, "Check Failed", sizeof(title));
-        strlcpy(message, "Check the network and manifest, then try again",
+        strlcpy(title, TR("Check Failed", "检查失败"), sizeof(title));
+        strlcpy(message,
+                TR("Check the network and manifest, then try again",
+                   "请检查网络与清单后重试"),
                 sizeof(message));
         break;
     }
@@ -2771,7 +3521,7 @@ static void settings_wlan_phone_refresh(esp_gsp_handle_t ui)
     } else {
         (void)esp_gsp_set_text(
             ui, GSP_BIND_SETTINGS_WLAN_PHONE_AP_SSID,
-            "Provisioning AP unavailable");
+            TR("Provisioning AP unavailable", "配网热点不可用"));
         ESP_LOGW(TAG, "read phone provisioning QR failed: %s",
                  esp_err_to_name(err));
     }
@@ -2849,7 +3599,8 @@ static void settings_build_connection_hint(
     }
     (void)snprintf(hint, hint_size, "AP: %s",
                    s_state.provisioning_ap_ssid[0] != '\0'
-                       ? s_state.provisioning_ap_ssid : "unavailable");
+                       ? s_state.provisioning_ap_ssid
+                       : TR("unavailable", "不可用"));
 }
 
 static void settings_llm_refresh(esp_gsp_handle_t ui)
@@ -2858,15 +3609,24 @@ static void settings_llm_refresh(esp_gsp_handle_t ui)
     const mosaic_settings_snapshot_t *snapshot = &s_state.snapshot;
     (void)esp_gsp_set_text(ui,
         GSP_BIND_SETTINGS_INTEGRATIONS_LLM_BACKEND,
-        snapshot->llm.backend[0] ? snapshot->llm.backend : "Not configured");
+        snapshot->llm.backend[0] ? snapshot->llm.backend
+                                 : TR("Not configured", "未配置"));
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_INTEGRATIONS_LLM_MODEL,
-        snapshot->llm.model[0] ? snapshot->llm.model : "Not configured");
+        snapshot->llm.model[0] ? snapshot->llm.model
+                               : TR("Not configured", "未配置"));
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_INTEGRATIONS_LLM_BASE_URL,
-        snapshot->llm.base_url[0] ? snapshot->llm.base_url : "Not configured");
+        snapshot->llm.base_url[0] ? snapshot->llm.base_url
+                                  : TR("Not configured", "未配置"));
     char capabilities[48];
-    (void)snprintf(capabilities, sizeof(capabilities), "Tools %s · Vision %s",
-        snapshot->llm.supports_tools ? "On" : "Off",
-        snapshot->llm.supports_vision ? "On" : "Off");
+    if (mosaic_i18n_is_chinese()) {
+        (void)snprintf(capabilities, sizeof(capabilities), "工具 %s · 视觉 %s",
+            snapshot->llm.supports_tools ? TR("On", "开") : TR("Off", "关"),
+            snapshot->llm.supports_vision ? TR("On", "开") : TR("Off", "关"));
+    } else {
+        (void)snprintf(capabilities, sizeof(capabilities), "Tools %s · Vision %s",
+            snapshot->llm.supports_tools ? "On" : "Off",
+            snapshot->llm.supports_vision ? "On" : "Off");
+    }
     (void)esp_gsp_set_text(ui,
         GSP_BIND_SETTINGS_INTEGRATIONS_LLM_CAPABILITIES, capabilities);
     char url[MOSAIC_SETTINGS_LLM_URL_LEN] = {0};
@@ -2879,7 +3639,7 @@ static void settings_llm_refresh(esp_gsp_handle_t ui)
     settings_build_configuration_url(snapshot, "llm", url, sizeof(url));
     (void)esp_gsp_set_text(ui,
         GSP_BIND_SETTINGS_INTEGRATIONS_LLM_CONFIG_URL,
-        url[0] ? url : "Unavailable");
+        url[0] ? url : TR("Unavailable", "不可用"));
     settings_qr_push(ui,
         GSP_BIND_SETTINGS_INTEGRATIONS_LLM_CONFIG_QR_CANVAS,
         SETTINGS_QR_SIZE, url,
@@ -2926,7 +3686,7 @@ static void settings_channels_refresh(esp_gsp_handle_t ui)
         GSP_BIND_SETTINGS_CHANNELS_CONNECTION_HINT, connection_hint);
     settings_build_configuration_url(snapshot, "im", url, sizeof(url));
     (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_CHANNELS_CONFIG_URL,
-                           url[0] ? url : "Unavailable");
+                           url[0] ? url : TR("Unavailable", "不可用"));
     settings_qr_push(ui, GSP_BIND_SETTINGS_CHANNELS_CONFIG_QR_CANVAS,
                      SETTINGS_CHANNEL_QR_SIZE, url,
                      s_state.rendered_channel_qr,
@@ -2950,8 +3710,9 @@ static void settings_open_integration(esp_gsp_handle_t ui, bool llm)
     if (esp_gsp_stack_view_push(ui, GSP_OBJ_KEY_SETTINGS_STACK,
             page, true) != ESP_GSP_OK) {
         (void)mosaic_top_notice_show(
-            ui, &s_top_notice, "AI & Integrations",
-            "Unable to open page", SETTINGS_NOTICE_DURATION_MS);
+            ui, &s_top_notice, TR("AI & Integrations", "AI与集成"),
+            TR("Unable to open page", "无法打开页面"),
+            SETTINGS_NOTICE_DURATION_MS);
         return;
     }
     mosaic_app_shell_set_root_visible(ui, false);
@@ -3013,18 +3774,26 @@ static void settings_dispatch_call(
             settings_open_detail(ui, SETTINGS_DETAIL_BATTERY);
             return;
         }
-        if (item == 8U) {
+        if (item == SETTINGS_ROOT_ABOUT_INDEX) {
             settings_refresh_snapshot(ui);
             settings_open_detail(ui, SETTINGS_DETAIL_ABOUT);
             s_state.update_notice_sequence =
                 s_state.snapshot.update.sequence;
             return;
         }
+        if (item == SETTINGS_ROOT_LOCATION_INDEX) {
+            settings_open_detail(ui, SETTINGS_DETAIL_CITY);
+            return;
+        }
+        if (item == SETTINGS_ROOT_LANGUAGE_INDEX) {
+            settings_open_detail(ui, SETTINGS_DETAIL_LANGUAGE);
+            return;
+        }
         static const uint16_t pages[] = {
             [3] = SETTINGS_DISPLAY_PAGE,
             [4] = SETTINGS_SOUND_PAGE,
             [5] = SETTINGS_SECURITY_PAGE,
-            [7] = SETTINGS_DEBUG_PAGE,
+            [SETTINGS_ROOT_DEBUG_INDEX] = SETTINGS_DEBUG_PAGE,
         };
         const uint16_t page = pages[item];
         if (page == 0U || esp_gsp_stack_view_push(
@@ -3143,6 +3912,74 @@ static void settings_dispatch_call(
         }
         return;
     case GSP_ACT_ID_SETTINGS_DETAIL_ROW:
+        if (s_detail_kind == SETTINGS_DETAIL_CITY) {
+            const uint32_t item = event->data.call.item;
+            if (s_city_province < 0) {
+                /* Province list: row 0 clears the selection, other rows drill
+                 * down into the province without popping the detail page. */
+                if (item >= s_city_row_count) {
+                    return;
+                }
+                if (item == 0U) {
+                    if (mosaic_settings_set_weather_city(-1) != ESP_OK) {
+                        mosaic_top_notice_show(ui, &s_top_notice,
+                            TR("Location", "位置"),
+                            TR("Unable to save city", "无法保存城市"),
+                            SETTINGS_NOTICE_DURATION_MS);
+                        return;
+                    }
+                    s_state.snapshot.weather_city_index = -1;
+                    settings_city_render_list(ui);
+                    return;
+                }
+                const size_t province_index = (size_t)item - 1U;
+                if (province_index < mosaic_settings_province_count()) {
+                    s_city_province = (int)province_index;
+                    settings_city_render_list(ui);
+                    (void)esp_gsp_list_scroll_to(ui, s_detail_list, 0);
+                }
+                return;
+            }
+            /* City list: map the row to its flat global preset index. */
+            const mosaic_settings_province_t *province =
+                mosaic_settings_province((size_t)s_city_province);
+            if (province == NULL || item >= province->city_count) {
+                return;
+            }
+            const int city_index =
+                (int)settings_province_city_base((size_t)s_city_province) +
+                (int)item;
+            if (mosaic_settings_set_weather_city(city_index) != ESP_OK) {
+                mosaic_top_notice_show(ui, &s_top_notice,
+                    TR("Location", "位置"),
+                    TR("Unable to save city", "无法保存城市"),
+                    SETTINGS_NOTICE_DURATION_MS);
+                return;
+            }
+            s_state.snapshot.weather_city_index = city_index;
+            settings_city_render_list(ui);
+            return;
+        }
+        if (s_detail_kind == SETTINGS_DETAIL_LANGUAGE) {
+            const uint32_t item = event->data.call.item;
+            if (item > 1U) {
+                return;
+            }
+            const char *tag = item == 0U ? "en" : "zh";
+            if (mosaic_settings_set_language(tag) != ESP_OK) {
+                mosaic_top_notice_show(ui, &s_top_notice,
+                    TR("Language", "语言"),
+                    TR("Unable to save language", "无法保存语言设置"),
+                    SETTINGS_NOTICE_DURATION_MS);
+                return;
+            }
+            s_state.snapshot.language[0] = '\0';
+            strlcpy(s_state.snapshot.language, tag,
+                    sizeof(s_state.snapshot.language));
+            settings_detail_list_attach(ui);
+            (void)esp_gsp_list_refresh(ui, s_detail_list);
+            return;
+        }
         if (s_detail_kind == SETTINGS_DETAIL_ABOUT &&
                 event->data.call.item == 5U) {
             settings_open_update_page(ui);
@@ -3151,7 +3988,8 @@ static void settings_dispatch_call(
         if (s_detail_kind == SETTINGS_DETAIL_SAFE_MODE &&
                 event->data.call.item == 3U) {
             (void)mosaic_top_notice_show(
-                ui, &s_top_notice, "Safe Mode", "Restart required",
+                ui, &s_top_notice, TR("Safe Mode", "安全模式"),
+                TR("Restart required", "需要重启"),
                 SETTINGS_NOTICE_DURATION_MS);
         }
         return;
@@ -3178,8 +4016,10 @@ static void settings_dispatch_call(
             s_state.snapshot.web_logs_enabled = enabled;
         } else {
             ESP_LOGE(TAG, "set Web live logs failed: %s", esp_err_to_name(err));
-            mosaic_top_notice_show(ui, &s_top_notice, "Debug",
-                "Unable to save log setting", SETTINGS_NOTICE_DURATION_MS);
+            mosaic_top_notice_show(ui, &s_top_notice,
+                TR("Debug", "调试"),
+                TR("Unable to save log setting", "无法保存日志设置"),
+                SETTINGS_NOTICE_DURATION_MS);
         }
         (void)settings_render_web_logs(ui);
         return;
@@ -3535,6 +4375,7 @@ static void settings_event(
         s_root_list = ESP_GSP_LIST_NONE;
         s_wlan_list = ESP_GSP_LIST_NONE;
         s_detail_list = ESP_GSP_LIST_NONE;
+        s_city_province = -1;
         s_update_notes_list = ESP_GSP_LIST_NONE;
         s_update_note_count = 0U;
         s_rendered_update_title[0] = '\0';
@@ -3640,8 +4481,10 @@ static void settings_event(
                         s_state.llm_phase = SETTINGS_LLM_CONFIGURING;
                         settings_llm_render(ui);
                         (void)mosaic_top_notice_show(
-                            ui, &s_top_notice, "Configuration not found",
-                            "Submit the form on your phone and try again",
+                            ui, &s_top_notice,
+                            TR("Configuration not found", "未找到配置"),
+                            TR("Submit the form on your phone and try again",
+                               "请在手机上提交表单后重试"),
                             SETTINGS_NOTICE_DURATION_MS);
                     }
                 }
@@ -3675,9 +4518,9 @@ static void settings_event(
         if (s_state.wlan_connect_pending &&
                 wlan_now >= s_state.wlan_connect_deadline_us) {
             s_state.wlan_connect_pending = false;
-            s_state.wlan_notice_title = "Connection timed out";
+            s_state.wlan_notice_title = TR("Connection timed out", "连接超时");
             s_state.wlan_notice_message =
-                "Check the network and try again";
+                TR("Check the network and try again", "请检查网络后重试");
             s_state.wlan_notice_pending = true;
             s_state.wlan_scan_next_us = wlan_now;
             (void)settings_wlan_render(ui);
@@ -3737,6 +4580,7 @@ static void settings_event(
         s_root_list = ESP_GSP_LIST_NONE;
         s_wlan_list = ESP_GSP_LIST_NONE;
         s_detail_list = ESP_GSP_LIST_NONE;
+        s_city_province = -1;
         s_update_notes_list = ESP_GSP_LIST_NONE;
         s_state.wlan_scan_compact_valid = false;
         s_state.wlan_notice_pending = false;
@@ -3777,6 +4621,15 @@ static bool settings_back(esp_gsp_handle_t ui, int64_t timestamp_us)
     (void)timestamp_us;
     if (settings_update_page_visible(ui)) {
         settings_leave_update_page(ui);
+        return true;
+    }
+    if (settings_detail_visible(ui, SETTINGS_DETAIL_CITY) &&
+            s_city_province >= 0) {
+        /* Leave the city list and return to the province list without popping
+         * the detail page. */
+        s_city_province = -1;
+        settings_city_render_list(ui);
+        (void)esp_gsp_list_scroll_to(ui, s_detail_list, 0);
         return true;
     }
     s_state.integration_page = 0;

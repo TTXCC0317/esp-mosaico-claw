@@ -9,6 +9,7 @@
 #include "camera_objects.h"
 #include "mosaic_app_catalog.h"
 #include "mosaic_hub_actions.h"
+#include "mosaic_i18n.h"
 #include "mosaic_runtime.h"
 
 #include <errno.h>
@@ -17,6 +18,9 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <time.h>
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 
 #include "claw_paths.h"
 #include "mosaic_camera.h"
@@ -111,9 +115,12 @@ static void camera_render_recognition(esp_gsp_handle_t ui)
     (void)esp_gsp_set_visible(ui, GSP_BIND_CAMERA_COLOR_SELECTED_VISIBLE, s_recognition_mode == CAMERA_VISION_MODE_COLOR);
     (void)esp_gsp_set_visible(ui, GSP_BIND_CAMERA_MOTION_SELECTED_VISIBLE, s_recognition_mode == CAMERA_VISION_MODE_MOTION);
     (void)esp_gsp_set_text(ui, GSP_BIND_CAMERA_RECOGNITION_STATUS,
-                           s_recognition_mode == CAMERA_VISION_MODE_QRCODE ? "QR scanning" :
-                           s_recognition_mode == CAMERA_VISION_MODE_COLOR ? "Color scanning" :
-                           s_recognition_mode == CAMERA_VISION_MODE_MOTION ? "Motion scanning" : "");
+                           s_recognition_mode == CAMERA_VISION_MODE_QRCODE ?
+                               TR("QR scanning", "二维码扫描中") :
+                           s_recognition_mode == CAMERA_VISION_MODE_COLOR ?
+                               TR("Color scanning", "色彩扫描中") :
+                           s_recognition_mode == CAMERA_VISION_MODE_MOTION ?
+                               TR("Motion scanning", "运动扫描中") : "");
     if (s_recognition_mode == CAMERA_VISION_MODE_OFF) {
         (void)esp_gsp_set_visible(ui, GSP_BIND_CAMERA_RECOGNITION_RESULT_VISIBLE, false);
     }

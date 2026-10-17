@@ -8,7 +8,11 @@
 
 #include "env_binds.h"
 #include "imu_binds.h"
+#include "mosaic_i18n.h"
 #include "tof_binds.h"
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 
 enum {
     DEMO_BIND_IMU_BUBBLE_X = 0,
@@ -69,13 +73,6 @@ static const mosaic_env_sample_t k_env_samples[] = {
     { .temp = "24.1", .humidity = "75", .hcho = "29", .tvoc = "248" },
 };
 
-static const mosaic_tof_sample_t k_tof_samples[] = {
-    { .dist = "32.5", .status = "VALID" },
-    { .dist = "48.2", .status = "VALID" },
-    { .dist = "61.0", .status = "VALID" },
-    { .dist = "92.4", .status = "INVALID" },
-};
-
 static uint8_t s_frame;
 
 void mosaic_demo_tick(esp_gsp_handle_t ui, mosaic_demo_kind_t kind)
@@ -110,7 +107,14 @@ void mosaic_demo_tick(esp_gsp_handle_t ui, mosaic_demo_kind_t kind)
         break;
     }
     case MOSAIC_DEMO_TOF: {
-        const mosaic_tof_sample_t *tof = &k_tof_samples[idx];
+        /* Local so the TR() selector is evaluated at run time. */
+        const mosaic_tof_sample_t tof_samples[] = {
+            { .dist = "32.5", .status = TR("VALID", "有效") },
+            { .dist = "48.2", .status = TR("VALID", "有效") },
+            { .dist = "61.0", .status = TR("VALID", "有效") },
+            { .dist = "92.4", .status = TR("INVALID", "无效") },
+        };
+        const mosaic_tof_sample_t *tof = &tof_samples[idx];
         (void)esp_gsp_set_text(ui, GSP_BIND_TOF_DIST, tof->dist);
         (void)esp_gsp_set_text(ui, GSP_BIND_TOF_STATUS, tof->status);
         break;

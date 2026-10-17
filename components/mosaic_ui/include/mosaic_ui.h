@@ -32,6 +32,10 @@ esp_err_t mosaic_ui_start(void);
 esp_err_t mosaic_ui_back(void);
 /** Queue AI Create as the active App; safe to call from a board-button callback. */
 esp_err_t mosaic_ui_open_ai_create(void);
+/** Queue an App switch by catalogue name (e.g. "camera"); safe from any task. */
+esp_err_t mosaic_ui_open_app(const char *app_name);
+/** Best-effort check that the named App is the one currently active. */
+bool mosaic_ui_active_app_is(const char *app_name);
 /** Set Hub inactivity timeout used to lock and turn the panel off (0 = never). */
 void mosaic_ui_set_screen_timeout(uint32_t timeout_ms);
 /** Reset the inactivity timer after one mapped Mosaic pointer sample. */

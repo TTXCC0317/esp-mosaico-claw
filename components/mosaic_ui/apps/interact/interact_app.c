@@ -58,7 +58,6 @@ static void started(esp_gsp_handle_t ui)
     s_light_text[0] = s_light_text[1] = s_light_text[2] = -1;
     s_status_text = s_ir_text = -1;
     s_rendered_input_mode = -1;
-    interact_backend_start();
     render(ui, NULL);
     s_timer = esp_gsp_timer_create(ui, 50, render, NULL);
 }
@@ -67,7 +66,6 @@ static void stopping(esp_gsp_handle_t ui)
 {
     if (s_timer) esp_gsp_timer_delete(ui, s_timer);
     s_timer = NULL;
-    interact_backend_stop();
 }
 
 static void event(esp_gsp_handle_t ui, const struct mosaic_event *event)

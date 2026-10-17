@@ -19,6 +19,8 @@ ICONS = {
     "sound": HERE / "settings_root_sound.png",
     "security": HERE / "settings_root_security.png",
     "battery": None,
+    "location": None,
+    "language": None,
     "debug": None,
     "about": HERE / "settings_root_about.png",
 }
@@ -47,6 +49,40 @@ def draw_battery_icon() -> Image.Image:
         draw.rounded_rectangle(
             box((left, 18, right, 30)), radius=1 * scale, fill=color)
 
+    return icon.resize((48, 48), LANCZOS)
+
+
+def draw_location_icon() -> Image.Image:
+    """Map pin glyph (ring plus pointer) in the root icon size and colour."""
+    scale = 4
+    color = (214, 214, 222, 255)
+    icon = Image.new("RGBA", (48 * scale, 48 * scale), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(icon)
+
+    # Hollow ring at the top with a centred dot.
+    draw.ellipse((12 * scale, 8 * scale, 36 * scale, 32 * scale),
+                 outline=color, width=3 * scale)
+    draw.ellipse((20 * scale, 16 * scale, 28 * scale, 24 * scale),
+                 fill=color)
+    # Pointer tip below the ring.
+    draw.polygon([(17 * scale, 30 * scale), (31 * scale, 30 * scale),
+                  (24 * scale, 43 * scale)], fill=color)
+
+    return icon.resize((48, 48), LANCZOS)
+
+
+def draw_language_icon() -> Image.Image:
+    """Globe glyph (circle plus meridians) for the Language root row."""
+    scale = 4
+    color = (214, 214, 222, 255)
+    icon = Image.new("RGBA", (48 * scale, 48 * scale), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(icon)
+    draw.ellipse((8 * scale, 8 * scale, 40 * scale, 40 * scale),
+                 outline=color, width=3 * scale)
+    draw.line([(8 * scale, 24 * scale), (40 * scale, 24 * scale)],
+              fill=color, width=3 * scale)
+    draw.ellipse((18 * scale, 8 * scale, 30 * scale, 40 * scale),
+                 outline=color, width=3 * scale)
     return icon.resize((48, 48), LANCZOS)
 
 
@@ -122,6 +158,8 @@ def main() -> None:
     ]
     for name, path in ICONS.items():
         source = (draw_battery_icon() if name == "battery"
+                  else draw_location_icon() if name == "location"
+                  else draw_language_icon() if name == "language"
                   else draw_debug_icon() if name == "debug"
                   else Image.open(path).convert("RGBA"))
         icon = Image.new("RGBA", (48, 48), (0, 0, 0, 0))

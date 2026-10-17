@@ -10,7 +10,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "mosaic_i18n.h"
+
 #include "sdkconfig.h"
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 
 #if CONFIG_MOSAIC_UI_BLUETOOTH_AUDIO
 
@@ -97,7 +102,7 @@ static void runtime_set_error(bluetooth_audio_runtime_handle_t runtime,
     xSemaphoreTake(runtime->lock, portMAX_DELAY);
     runtime->model.state = BLUETOOTH_AUDIO_STATE_ERROR;
     snprintf(runtime->model.error, sizeof(runtime->model.error), "%s",
-             message ? message : "Unknown Bluetooth error");
+             message ? message : TR("Unknown Bluetooth error", "蓝牙未知错误"));
     xSemaphoreGive(runtime->lock);
     runtime_notify(runtime);
 }
@@ -376,7 +381,8 @@ cleanup:
     }
     free(decode_buffer);
     if (setup_err != ESP_OK && !runtime->stopping) {
-        runtime_set_error(runtime, "Bluetooth audio decoder failed");
+        runtime_set_error(runtime,
+            TR("Bluetooth audio decoder failed", "蓝牙音频解码失败"));
     }
     xSemaphoreTake(runtime->lock, portMAX_DELAY);
     runtime->stream_task = NULL;
@@ -570,7 +576,8 @@ static void bluetooth_event(esp_bt_audio_event_t event, void *event_data,
                    ESP_BT_AUDIO_STREAM_STATE_STARTED) {
             if (stream_task_start(runtime, stream_event->stream_handle) !=
                     ESP_OK) {
-                runtime_set_error(runtime, "Cannot start audio stream");
+                runtime_set_error(runtime,
+                    TR("Cannot start audio stream", "无法启动音频流"));
             }
         } else if (stream_event->state ==
                        ESP_BT_AUDIO_STREAM_STATE_STOPPED ||
@@ -696,13 +703,14 @@ esp_err_t bluetooth_audio_runtime_start(bluetooth_audio_runtime_handle_t runtime
     esp_err_t err = audio_mixer_open_track(runtime->mixer,
         AUDIO_MIXER_TRACK_APP, "mosaic/bluetooth", &runtime->track);
     if (err != ESP_OK) {
-        runtime_set_error(runtime, "Audio output is busy");
+        runtime_set_error(runtime, TR("Audio output is busy", "音频输出被占用"));
         return err;
     }
     if (!s_decoders_registered) {
         if (esp_audio_dec_register_default() != ESP_AUDIO_ERR_OK ||
                 esp_audio_simple_dec_register_default() != ESP_AUDIO_ERR_OK) {
-            runtime_set_error(runtime, "Audio decoder registration failed");
+            runtime_set_error(runtime,
+                TR("Audio decoder registration failed", "音频解码器注册失败"));
             (void)audio_mixer_close_track(runtime->track);
             runtime->track = NULL;
             return ESP_FAIL;
@@ -717,7 +725,8 @@ esp_err_t bluetooth_audio_runtime_start(bluetooth_audio_runtime_handle_t runtime
         err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
     }
     if (err != ESP_OK) {
-        runtime_set_error(runtime, "Bluetooth controller start failed");
+        runtime_set_error(runtime,
+            TR("Bluetooth controller start failed", "蓝牙控制器启动失败"));
         goto fail;
     }
 
@@ -739,7 +748,8 @@ esp_err_t bluetooth_audio_runtime_start(bluetooth_audio_runtime_handle_t runtime
         err = esp_bt_audio_classic_set_scan_mode(true, true);
     }
     if (err != ESP_OK) {
-        runtime_set_error(runtime, "Bluetooth audio start failed");
+        runtime_set_error(runtime,
+            TR("Bluetooth audio start failed", "蓝牙音频启动失败"));
         goto fail;
     }
 

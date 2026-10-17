@@ -13,8 +13,8 @@ sys.path.insert(0, str(HERE.parent.parent.parent / "common"))
 
 from font_paths import DEJAVU_SANS, DEJAVU_SANS_BOLD  # noqa: E402
 from scene_common import (  # noqa: E402
-    CONTENT_H, CONTENT_W, container, explicit_charset, image, label, layer,
-    scene_out_path, shared_charset, shared_prefix, write_scene,
+    CONTENT_H, CONTENT_W, app_root_shell, container, explicit_charset, image,
+    label, layer, scene_out_path, shared_charset, shared_prefix, write_scene,
 )
 
 FONT = DEJAVU_SANS
@@ -40,6 +40,9 @@ def main():
     images = [(f"{ASSETS}/{name}.png", 257, 257) for name in WEATHER_ART]
     objs, content = shared_prefix(images, FONT_POLICIES, BOLD)
     objs.append(container(content, 0, 0, CONTENT_W, CONTENT_H, bg="#000000"))
+    # The shared Shell no longer bakes the native title bitmap, so the App root
+    # page draws its own title label; runtime i18n translates it as usual.
+    app_root_shell(objs, content, "Weather")
 
     # The shared App shell owns y=0..63. Prototype current-weather region.
     objs.append(label(content, 33, 86, 178, 80, "--", size=88,

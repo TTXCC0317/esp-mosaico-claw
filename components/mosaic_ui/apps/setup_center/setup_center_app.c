@@ -23,6 +23,7 @@
 #include "mosaic_app_catalog.h"
 #include "mosaic_app_shell.h"
 #include "mosaic_hub_actions.h"
+#include "mosaic_i18n.h"
 #include "mosaic_runtime.h"
 #include "mosaic_settings.h"
 #include "mosaic_top_notice.h"
@@ -31,6 +32,9 @@
 #include "setup_center_binds.h"
 #include "setup_center_objects.h"
 #include "setup_center_wechat_queue.h"
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 #if defined(ESP_PLATFORM)
 #include "mosaic_loader.h"
 #endif
@@ -731,20 +735,24 @@ static void setup_overview_render(void)
     if (s_setup.ui == NULL) {
         return;
     }
-    const char *network = "Not configured";
+    const char *network = TR("Not configured", "未配置");
     if (s_setup.network_configured) {
         network = s_setup.connected_ssid;
     } else if (s_setup.network_skipped) {
-        network = "Skipped · Not configured";
+        network = TR("Skipped · Not configured", "已跳过 · 未配置");
     }
     const char *wechat = s_setup.wechat_configured
-        ? "Mosaico-Lab · Linked"
-        : (s_setup.wechat_skipped ? "Skipped · Not linked" : "Not linked");
+        ? TR("Mosaico-Lab · Linked", "Mosaico实验室 · 已关联")
+        : (s_setup.wechat_skipped
+            ? TR("Skipped · Not linked", "已跳过 · 未关联")
+            : TR("Not linked", "未关联"));
     const char *llm = s_setup.llm_configured
         ? (s_setup.settings_snapshot.llm.model[0]
-            ? s_setup.settings_snapshot.llm.model : "Configured")
-        : (s_setup.llm_skipped ? "Skipped · Not configured"
-                               : "Not configured");
+            ? s_setup.settings_snapshot.llm.model
+            : TR("Configured", "已配置"))
+        : (s_setup.llm_skipped
+            ? TR("Skipped · Not configured", "已跳过 · 未配置")
+            : TR("Not configured", "未配置"));
     (void)gsp_setup_center_setup_network_summary_set_text(
         s_setup.ui, network);
     (void)gsp_setup_center_setup_wechat_summary_set_text(
@@ -857,7 +865,7 @@ static esp_err_t setup_wechat_start_service(bool force)
         wechat_binding_flow_start_backend(&ops, &status, force);
     if (err != ESP_OK && s_setup.ui != NULL) {
         (void)mosaic_top_notice_show(
-            s_setup.ui, &s_notice, "Unable to bind WeChat",
+            s_setup.ui, &s_notice, TR("Unable to bind WeChat", "无法绑定微信"),
             esp_err_to_name(err), 2600);
     }
     return err;
@@ -1004,7 +1012,7 @@ static void setup_wechat_apply_model(int64_t now_us)
     if (status.state == MOSAIC_SETUP_WECHAT_EXPIRED ||
             status.state == MOSAIC_SETUP_WECHAT_ERROR) {
         (void)mosaic_top_notice_show(
-            s_setup.ui, &s_notice, "WeChat binding failed",
+            s_setup.ui, &s_notice, TR("WeChat binding failed", "微信绑定失败"),
             s_setup.wechat_flow.bind_status, 2600);
     }
     setup_overview_render();
@@ -1037,18 +1045,25 @@ static esp_err_t setup_llm_refresh_model(bool push_qr)
         mosaic_settings_llm_is_configured(&snapshot);
     (void)gsp_setup_center_setup_llm_backend_set_text(
         s_setup.ui, snapshot.llm.backend[0]
-            ? snapshot.llm.backend : "Not configured");
+            ? snapshot.llm.backend : TR("Not configured", "未配置"));
     (void)gsp_setup_center_setup_llm_model_set_text(
         s_setup.ui, snapshot.llm.model[0]
-            ? snapshot.llm.model : "Not configured");
+            ? snapshot.llm.model : TR("Not configured", "未配置"));
     (void)gsp_setup_center_setup_llm_base_url_set_text(
         s_setup.ui, snapshot.llm.base_url[0]
-            ? snapshot.llm.base_url : "Not configured");
+            ? snapshot.llm.base_url : TR("Not configured", "未配置"));
     char capabilities[48];
-    (void)snprintf(capabilities, sizeof(capabilities),
-        "Tools %s · Vision %s",
-        snapshot.llm.supports_tools ? "On" : "Off",
-        snapshot.llm.supports_vision ? "On" : "Off");
+    const char *tools = snapshot.llm.supports_tools
+        ? TR("On", "开") : TR("Off", "关");
+    const char *vision = snapshot.llm.supports_vision
+        ? TR("On", "开") : TR("Off", "关");
+    if (mosaic_i18n_is_chinese()) {
+        (void)snprintf(capabilities, sizeof(capabilities),
+            "工具 %s · 视觉 %s", tools, vision);
+    } else {
+        (void)snprintf(capabilities, sizeof(capabilities),
+            "Tools %s · Vision %s", tools, vision);
+    }
     (void)gsp_setup_center_setup_llm_capabilities_set_text(
         s_setup.ui, capabilities);
 
@@ -1058,7 +1073,7 @@ static esp_err_t setup_llm_refresh_model(bool push_qr)
                        snapshot.network.portal_url);
     }
     (void)gsp_setup_center_setup_llm_config_url_set_text(
-        s_setup.ui, config_url[0] ? config_url : "Unavailable");
+        s_setup.ui, config_url[0] ? config_url : TR("Unavailable", "不可用"));
     strlcpy(s_setup.llm_config_url, config_url,
             sizeof(s_setup.llm_config_url));
     if (push_qr && config_url[0] != '\0') {
@@ -1234,7 +1249,7 @@ static void setup_network_select(const mosaic_event_t *event)
     }
     (void)esp_gsp_set_text(s_setup.ui, GSP_BIND_SETUP_PASSWORD_VALUE, "");
     (void)esp_gsp_set_text(s_setup.ui, GSP_BIND_SETUP_PASSWORD_DISPLAY,
-                           "Password");
+                           TR("Password", "密码"));
     s_setup.rendered_password_length = UINT8_MAX;
     s_setup.network_phase = SETUP_NETWORK_PASSWORD;
     setup_network_render();
@@ -1258,8 +1273,8 @@ static bool setup_network_join(int64_t now_us)
     const size_t length = strlen(password);
     if (length < SETUP_PASSWORD_MIN) {
         (void)mosaic_top_notice_show(
-            s_setup.ui, &s_notice, "Password too short",
-            "Enter at least 8 characters", 2400);
+            s_setup.ui, &s_notice, TR("Password too short", "密码太短"),
+            TR("Enter at least 8 characters", "请至少输入 8 个字符"), 2400);
         return false;
     }
     const bool backend = mosaic_settings_wifi_backend_available();
@@ -1274,7 +1289,8 @@ static bool setup_network_join(int64_t now_us)
         if (err != ESP_OK) {
             s_setup.network_connect_pending = false;
             (void)mosaic_top_notice_show(
-                s_setup.ui, &s_notice, "Unable to join network",
+                s_setup.ui, &s_notice,
+                TR("Unable to join network", "无法加入网络"),
                 esp_err_to_name(err), 2600);
             return false;
         }
@@ -1314,8 +1330,9 @@ static void setup_network_phone_open(void)
     const esp_err_t err = setup_network_phone_refresh();
     if (err != ESP_OK) {
         (void)mosaic_top_notice_show(
-            s_setup.ui, &s_notice, "Provisioning unavailable",
-            "The device AP is not ready", 2600);
+            s_setup.ui, &s_notice,
+            TR("Provisioning unavailable", "配网不可用"),
+            TR("The device AP is not ready", "设备热点尚未就绪"), 2600);
     }
 }
 
@@ -1343,15 +1360,16 @@ static void setup_network_phone_submitted(void)
     if (backend &&
             (mosaic_settings_get_wifi(&live) != ESP_OK || !live.connected)) {
         (void)mosaic_top_notice_show(
-            s_setup.ui, &s_notice, "Waiting for phone",
-            "Submit Wi-Fi settings in the portal", 2800);
+            s_setup.ui, &s_notice, TR("Waiting for phone", "等待手机"),
+            TR("Submit Wi-Fi settings in the portal",
+               "请在网页中提交 Wi-Fi 设置"), 2800);
         return;
     }
     if (backend) {
         strlcpy(s_setup.connected_ssid, live.ssid,
                 sizeof(s_setup.connected_ssid));
     } else {
-        strlcpy(s_setup.connected_ssid, "Demo Wi-Fi",
+        strlcpy(s_setup.connected_ssid, TR("Demo Wi-Fi", "演示 Wi-Fi"),
                 sizeof(s_setup.connected_ssid));
     }
     s_setup.network_configured = true;
@@ -1429,16 +1447,19 @@ static void setup_network_apply_model(int64_t now_us)
         const char *message = NULL;
         switch (network.state) {
         case MOSAIC_SETTINGS_WIFI_AUTH_FAILED:
-            title = "Incorrect password";
-            message = "Update the password on your phone";
+            title = TR("Incorrect password", "密码错误");
+            message = TR("Update the password on your phone",
+                         "请在手机上更新密码");
             break;
         case MOSAIC_SETTINGS_WIFI_AP_NOT_FOUND:
-            title = "Network unavailable";
-            message = "Choose another WLAN on your phone";
+            title = TR("Network unavailable", "网络不可用");
+            message = TR("Choose another WLAN on your phone",
+                         "请在手机上选择其他 WLAN");
             break;
         case MOSAIC_SETTINGS_WIFI_FAILED:
-            title = "Connection failed";
-            message = "Check the settings and try again";
+            title = TR("Connection failed", "连接失败");
+            message = TR("Check the settings and try again",
+                         "请检查设置后重试");
             break;
         default:
             break;
@@ -1482,16 +1503,16 @@ static void setup_network_apply_model(int64_t now_us)
         s_setup.network_phase = SETUP_NETWORK_CONNECTED;
         break;
     case MOSAIC_SETTINGS_WIFI_AUTH_FAILED:
-        title = "Incorrect password";
-        message = "Check the password and try again";
+        title = TR("Incorrect password", "密码错误");
+        message = TR("Check the password and try again", "请检查密码后重试");
         break;
     case MOSAIC_SETTINGS_WIFI_AP_NOT_FOUND:
-        title = "Network unavailable";
-        message = "The selected WLAN was not found";
+        title = TR("Network unavailable", "网络不可用");
+        message = TR("The selected WLAN was not found", "未找到所选 WLAN");
         break;
     case MOSAIC_SETTINGS_WIFI_FAILED:
-        title = "Connection failed";
-        message = "Check the network and try again";
+        title = TR("Connection failed", "连接失败");
+        message = TR("Check the network and try again", "请检查网络后重试");
         break;
     case MOSAIC_SETTINGS_WIFI_CONNECTING:
     case MOSAIC_SETTINGS_WIFI_RETRY_WAIT:
@@ -1815,7 +1836,7 @@ static void setup_step(int64_t now_us)
             if (length != s_setup.rendered_password_length) {
                 (void)esp_gsp_set_text(
                     s_setup.ui, GSP_BIND_SETUP_PASSWORD_DISPLAY,
-                    length > 0U ? password : "Password");
+                    length > 0U ? password : TR("Password", "密码"));
                 s_setup.rendered_password_length = (uint8_t)length;
             }
         }
@@ -1860,8 +1881,9 @@ static void setup_step(int64_t now_us)
                 s_setup.selected_ssid[0] = '\0';
                 s_setup.network_phase = SETUP_NETWORK_SCAN;
                 (void)mosaic_top_notice_show(
-                    s_setup.ui, &s_notice, "Connection failed",
-                    "Incorrect password", 2600);
+                    s_setup.ui, &s_notice,
+                    TR("Connection failed", "连接失败"),
+                    TR("Incorrect password", "密码错误"), 2600);
             }
             setup_network_render();
             setup_overview_render();
@@ -1910,8 +1932,10 @@ static void setup_step(int64_t now_us)
             } else {
                 s_setup.llm_phase = SETUP_LLM_CONFIGURING;
                 (void)mosaic_top_notice_show(
-                    s_setup.ui, &s_notice, "Configuration not found",
-                    "Save the LLM settings and try again", 3000);
+                    s_setup.ui, &s_notice,
+                    TR("Configuration not found", "未找到配置"),
+                    TR("Save the LLM settings and try again",
+                       "请保存 LLM 设置后重试"), 3000);
             }
             setup_llm_render();
             setup_overview_render();

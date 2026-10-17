@@ -19,6 +19,7 @@ idf_component_register(
         esp_timer
         espressif__cjson
         gen_bmgr_codes
+        mosaic_ui
         settings
         wifi_manager
 )

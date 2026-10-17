@@ -32,6 +32,10 @@ esp_err_t mosaic_settings_platform_start_battery_monitor(void);
 /** Notify the Settings model after network provisioning state changes. */
 void mosaic_settings_platform_notify_network_changed(void);
 
+/** Apply the persisted weather city preset to the weather service. Call once
+ * after weather_service_init so the first refresh uses the chosen location. */
+void mosaic_settings_platform_apply_weather_city(void);
+
 #ifdef __cplusplus
 }
 #endif

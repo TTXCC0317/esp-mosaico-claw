@@ -23,6 +23,7 @@ from font_paths import DEJAVU_SANS  # noqa: E402
 from scene_common import (  # noqa: E402
     CONTENT_H,
     CONTENT_W,
+    app_root_shell,
     container,
     label,
     layer,
@@ -68,6 +69,7 @@ def main() -> None:
     objs, content = shared_prefix([], FONT_POLICIES, BOLD)
 
     objs.append(container(content, 0, 0, CONTENT_W, CONTENT_H, bg=BG))
+    app_root_shell(objs, content, "Breakout")
 
     # Keep the first-level App title in the shared Shell, exactly like Works.
     # Game-specific status gets its own row below that 64 px header.

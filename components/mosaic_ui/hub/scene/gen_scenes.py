@@ -40,6 +40,8 @@ from scene_common import (  # noqa: E402
     asset_scene,
     explicit_charset,
     shared_charset,
+    emit_i18n_header,
+    finalize_scene_i18n,
 )
 
 
@@ -885,6 +887,7 @@ def build_hub_objects():
 
 
 def write_scene(path: Path, screen: str, objects):
+    finalize_scene_i18n(objects)
     scene = {
         'screen': screen,
         'w': SCREEN_W,
@@ -903,6 +906,8 @@ def write_scene(path: Path, screen: str, objects):
     path.write_text(json.dumps(scene, ensure_ascii=False, indent=2) + '\n',
                     encoding='utf-8')
     print('wrote', path.name)
+    if 'assets' not in screen:
+        emit_i18n_header(path.parent, screen, objects)
 
 
 def main():

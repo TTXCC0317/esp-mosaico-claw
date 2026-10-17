@@ -11,3 +11,5 @@ set(MOSAIC_APP_GENERATED_HEADERS
     welcome_g2_actions.h welcome_g2_binds.h welcome_g2_objects.h
     welcome_g4_actions.h welcome_g4_binds.h welcome_g4_objects.h)
 set(MOSAIC_APP_TICK_MS 250)
+# welcome scenes are authored without scene_common and ship no i18n table.
+set(MOSAIC_APP_I18N OFF)

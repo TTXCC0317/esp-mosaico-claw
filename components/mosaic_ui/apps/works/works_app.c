@@ -6,6 +6,7 @@
 
 #include "mosaic_app_catalog.h"
 #include "mosaic_hub_actions.h"
+#include "mosaic_i18n.h"
 #include "mosaic_runtime.h"
 #include "works_actions.h"
 #include "works_binds.h"
@@ -14,6 +15,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 
 #define WORKS_APP_ID    7U
 #define WORKS_ROW_COUNT 4U
@@ -123,12 +127,12 @@ static const char *works_active_label(works_runtime_state_t state)
 {
     switch (state) {
     case WORKS_RUNTIME_QUEUED:
-        return "Starting";
+        return TR("Starting", "启动中");
     case WORKS_RUNTIME_STOPPING:
-        return "Stopping";
+        return TR("Stopping", "停止中");
     case WORKS_RUNTIME_RUNNING:
     default:
-        return "Running";
+        return TR("Running", "运行中");
     }
 }
 
@@ -168,7 +172,11 @@ static void works_render(esp_gsp_handle_t ui)
     }
 
     char text[24];
-    snprintf(text, sizeof(text), "%u ITEMS", (unsigned)item_count);
+    if (mosaic_i18n_is_chinese()) {
+        snprintf(text, sizeof(text), "%u 项", (unsigned)item_count);
+    } else {
+        snprintf(text, sizeof(text), "%u ITEMS", (unsigned)item_count);
+    }
     (void)esp_gsp_set_text(ui, GSP_BIND_WORKS_COUNT, text);
     (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_0_SELECTED,
                               s_selected_tab == WORKS_TAB_RECENT);
@@ -194,7 +202,7 @@ static void works_render(esp_gsp_handle_t ui)
         }
         bool active = works_state_is_active(item.state);
         esp_err_t err = esp_gsp_set_text(ui, s_row_name_binds[row], item.display_name);
-        err = works_first_error(err, esp_gsp_set_text(ui, s_row_meta_binds[row], item.builtin ? "Lua · System" : "Lua · Local"));
+        err = works_first_error(err, esp_gsp_set_text(ui, s_row_meta_binds[row], item.builtin ? TR("Lua · System", "Lua · 系统") : TR("Lua · Local", "Lua · 本地")));
         if (active) {
             err = works_first_error(err, esp_gsp_set_text(ui, s_row_active_text_binds[row], works_active_label(item.state)));
         }
@@ -300,7 +308,7 @@ static void works_event(
 {
     const mosaic_event_t *event = raw_event;
     if (event && event->type == MOSAIC_EVENT_START) {
-        (void)esp_gsp_set_text(ui, GSP_BIND_WORKS_COUNT, "0 ITEMS");
+        (void)esp_gsp_set_text(ui, GSP_BIND_WORKS_COUNT, TR("0 ITEMS", "0 项"));
         (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_0_SELECTED, true);
         (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_TAB_1_SELECTED, false);
         (void)esp_gsp_set_visible(ui, GSP_BIND_WORKS_PAGER_VISIBLE, false);

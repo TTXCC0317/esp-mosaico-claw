@@ -8,6 +8,7 @@
 #include "bluetooth_objects.h"
 #include "mosaic_app_catalog.h"
 #include "mosaic_hub_actions.h"
+#include "mosaic_i18n.h"
 #include "mosaic_runtime.h"
 #include "mosaic_settings.h"
 #include "mosaic_top_notice.h"
@@ -19,6 +20,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 
 /* ID 10 is owned by the ported Setup Center app. Keep this stable because
  * asynchronous Bluetooth runtime updates target the app by this ID. */
@@ -109,20 +113,20 @@ static const char *state_text(bluetooth_audio_state_t state)
 {
     switch (state) {
     case BLUETOOTH_AUDIO_STATE_STARTING:
-        return "Starting";
+        return TR("Starting", "启动中");
     case BLUETOOTH_AUDIO_STATE_DISCOVERABLE:
-        return "Discoverable · Waiting for phone";
+        return TR("Discoverable · Waiting for phone", "可被发现 · 等待手机连接");
     case BLUETOOTH_AUDIO_STATE_CONNECTED:
-        return "Connected";
+        return TR("Connected", "已连接");
     case BLUETOOTH_AUDIO_STATE_PLAYING:
-        return "Playing";
+        return TR("Playing", "播放中");
     case BLUETOOTH_AUDIO_STATE_PAUSED:
-        return "Paused";
+        return TR("Paused", "已暂停");
     case BLUETOOTH_AUDIO_STATE_ERROR:
-        return "Error";
+        return TR("Error", "错误");
     case BLUETOOTH_AUDIO_STATE_OFF:
     default:
-        return "Bluetooth unavailable";
+        return TR("Bluetooth unavailable", "蓝牙不可用");
     }
 }
 
@@ -190,11 +194,13 @@ static void bluetooth_render(esp_gsp_handle_t ui)
             bluetooth_audio_runtime_get_snapshot(s_runtime, &s_snapshot) !=
                 ESP_OK) {
         (void)esp_gsp_set_text(ui, GSP_BIND_BT_STATUS,
-                               "Bluetooth unavailable");
+                               TR("Bluetooth unavailable", "蓝牙不可用"));
         (void)esp_gsp_set_text(ui, GSP_BIND_BT_DEVICE_NAME,
-                               "Audio mixer unavailable");
+                               TR("Audio mixer unavailable",
+                                  "音频混音服务不可用"));
         (void)esp_gsp_set_text(ui, GSP_BIND_BT_TITLE,
-                               "Waiting for audio service");
+                               TR("Waiting for audio service",
+                                  "等待音频服务"));
         (void)esp_gsp_set_text(ui, GSP_BIND_BT_ARTIST, "");
         (void)esp_gsp_set_text(ui, GSP_BIND_BT_ELAPSED, "00:00");
         (void)esp_gsp_set_text(ui, GSP_BIND_BT_DURATION, "00:00");
@@ -223,8 +229,9 @@ static void bluetooth_render(esp_gsp_handle_t ui)
                            s_snapshot.device_name);
     (void)esp_gsp_set_text(ui, GSP_BIND_BT_TITLE,
                            s_snapshot.title[0] ? s_snapshot.title :
-                           (s_snapshot.connected ? "Waiting for playback" :
-                                                   "Waiting for phone"));
+                           (s_snapshot.connected ?
+                                TR("Waiting for playback", "等待播放") :
+                                TR("Waiting for phone", "等待手机连接")));
     (void)esp_gsp_set_text(ui, GSP_BIND_BT_ARTIST, s_snapshot.artist);
 
     char text[32];
@@ -371,8 +378,9 @@ static void bluetooth_event(esp_gsp_handle_t ui,
         /* This is the ownership boundary: leaving the App powers BT down. */
         if (s_snapshot.connected) {
             (void)mosaic_top_notice_show(
-                ui, &s_exit_notice, "Disconnecting Bluetooth",
-                "Returning to Home...", 0);
+                ui, &s_exit_notice,
+                TR("Disconnecting Bluetooth", "正在断开蓝牙"),
+                TR("Returning to Home...", "正在返回主页..."), 0);
         }
         bluetooth_audio_runtime_delete(s_runtime);
         mosaic_top_notice_detach(ui);
@@ -410,15 +418,19 @@ static void bluetooth_host_render(esp_gsp_handle_t ui)
     (void)esp_gsp_set_visible(ui, GSP_BIND_BT_PLAYER_VISIBLE,
                               s_host_connected);
     (void)esp_gsp_set_text(ui, GSP_BIND_BT_STATUS,
-                           s_host_connected ? "Connected" : "Discoverable");
+                           s_host_connected ?
+                               TR("Connected", "已连接") :
+                               TR("Discoverable", "可被发现"));
     (void)esp_gsp_set_text(ui, GSP_BIND_BT_DEVICE_NAME,
-                           s_host_connected ? "Mosaico Phone" :
-                                              "ESP-Claw-Audio");
+                           s_host_connected ?
+                               TR("Mosaico Phone", "Mosaico 手机") :
+                               TR("ESP-Claw-Audio", "ESP-Claw-Audio"));
     (void)esp_gsp_set_text(ui, GSP_BIND_BT_TITLE,
-                           s_host_connected ? "Midnight Drive" :
-                                              "Waiting for phone");
+                           s_host_connected ?
+                               TR("Midnight Drive", "午夜之旅") :
+                               TR("Waiting for phone", "等待手机连接"));
     (void)esp_gsp_set_text(ui, GSP_BIND_BT_ARTIST,
-                           s_host_connected ? "Mosaico" : "");
+                           s_host_connected ? TR("Mosaico", "Mosaico") : "");
     char elapsed[16];
     char duration[16];
     bluetooth_host_format_time(elapsed, sizeof(elapsed),

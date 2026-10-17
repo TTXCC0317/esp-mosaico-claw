@@ -1,7 +1,7 @@
 ---
 {
   "name": "light_switch",
-  "description": "Turn a board light on or off, set LED strip color or brightness, and control GPIO lights. Requires board_hardware_info skill.",
+  "description": "Turn a board light on or off, set LED strip color or brightness, and control GPIO lights. Requires board_hardware_info skill. Not for the interaction subboard LEDs (LED0-LED3): use the interact_led, interact_led_fill and interact_led_clear tools for those.",
   "metadata": {
     "cap_groups": [
       "cap_lua"
@@ -13,6 +13,8 @@
 # Light Switch
 
 Use this skill when the user asks to turn a board light on or off, change an LED strip color, or adjust light brightness.
+
+Do not use this skill for the lights of the ESP-Mosaico interaction subboard (LED0 to LED3). Those are driven by the `interact_led`, `interact_led_fill` and `interact_led_clear` tools, for example "打开LED1灯" means `interact_led` with index 1 and "打开LED灯" means `interact_led_fill`. Only use the scripts below for an external light strip or a GPIO light.
 
 Run exactly one script with `lua_run_script` after reading `board_hardware_info`.
 

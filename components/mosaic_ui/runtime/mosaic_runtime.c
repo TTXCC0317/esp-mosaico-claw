@@ -141,6 +141,27 @@ static void on_platform_ui_event(void* user_ctx, const esp_gsp_event_t* event)
     }
 }
 
+/* Registers the App's repeating tick timer. Both open_app (root -> App) and
+ * replace_app (App -> sibling App) must do this, otherwise an App reached via
+ * a replace transition never receives MOSAIC_EVENT_TIMER and any tick-driven
+ * logic (e.g. the Music progress bar) silently stops advancing. */
+static void register_app_tick(mosaic_runtime_handle_t runtime,
+    const mosaic_app_descriptor_t* descriptor)
+{
+    const mosaic_app_package_t* package
+        = mosaic_app_package_for_descriptor(descriptor);
+    if (package == NULL || package->tick_ms == 0) {
+        return;
+    }
+    mosaic_runtime_timer_t* timer = &runtime->timers[0];
+    timer->active = true;
+    timer->repeat = true;
+    memcpy(timer->id, "app_tick", sizeof("app_tick"));
+    timer->period_ms = package->tick_ms;
+    timer->revision = ++runtime->timer_revision;
+    timer->next_us = runtime->now_us + (int64_t)package->tick_ms * 1000;
+}
+
 static esp_err_t open_app(
     mosaic_runtime_handle_t runtime, const mosaic_app_descriptor_t* descriptor)
 {
@@ -162,19 +183,7 @@ static esp_err_t open_app(
     runtime->active = descriptor;
     runtime->pending = NULL;
     clear_timers(runtime);
-
-    const mosaic_app_package_t* package
-        = mosaic_app_package_for_descriptor(descriptor);
-    if (package != NULL && package->tick_ms != 0) {
-        mosaic_runtime_timer_t* timer = &runtime->timers[0];
-        timer->active = true;
-        timer->repeat = true;
-        memcpy(timer->id, "app_tick", sizeof("app_tick"));
-        timer->period_ms = package->tick_ms;
-        timer->revision = ++runtime->timer_revision;
-        timer->next_us
-            = runtime->now_us + (int64_t)package->tick_ms * 1000;
-    }
+    register_app_tick(runtime, descriptor);
 
     const mosaic_event_t event = {
         .type = MOSAIC_EVENT_START,
@@ -209,6 +218,7 @@ static esp_err_t replace_app(mosaic_runtime_handle_t runtime,
     runtime->pending = NULL;
     runtime->stop_dispatched = false;
     clear_timers(runtime);
+    register_app_tick(runtime, descriptor);
     const mosaic_event_t event = {
         .type = MOSAIC_EVENT_START,
         .timestamp_us = runtime->now_us,

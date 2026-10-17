@@ -6,8 +6,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
+
 #include "music_binds.h"
 #include "music_objects.h"
+#include "mosaic_i18n.h"
 
 #define MUSIC_PROGRESS_CURSOR_X_MIN 8
 #define MUSIC_PROGRESS_CURSOR_X_MAX 464
@@ -134,7 +138,8 @@ esp_err_t music_presenter_render(music_presenter_handle_t presenter,
     }
     if (state_changed && err == ESP_OK) {
         err = esp_gsp_set_text(ui, GSP_BIND_MUSIC_TOGGLE_TEXT,
-            snapshot->state == MUSIC_PLAYBACK_PLAYING ? "PAUSE" : "PLAY");
+            snapshot->state == MUSIC_PLAYBACK_PLAYING ?
+                TR("PAUSE", "暂停") : TR("PLAY", "播放"));
     }
     if (state_changed) {
         const bool playing = snapshot->state == MUSIC_PLAYBACK_PLAYING;
@@ -184,9 +189,14 @@ esp_err_t music_presenter_render(music_presenter_handle_t presenter,
                               err);
         }
         char summary[48];
-        snprintf(summary, sizeof(summary), "%u song%s  |  local music",
-                 (unsigned)snapshot->track_count,
-                 snapshot->track_count == 1U ? "" : "s");
+        if (mosaic_i18n_is_chinese()) {
+            snprintf(summary, sizeof(summary), "%u 首歌曲  |  本地音乐",
+                     (unsigned)snapshot->track_count);
+        } else {
+            snprintf(summary, sizeof(summary), "%u song%s  |  local music",
+                     (unsigned)snapshot->track_count,
+                     snapshot->track_count == 1U ? "" : "s");
+        }
         if (err == ESP_OK) {
             err = esp_gsp_set_text(ui, GSP_BIND_MUSIC_LIBRARY_SUMMARY,
                                    summary);

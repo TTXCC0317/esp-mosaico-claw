@@ -17,11 +17,15 @@
 
 #include "mosaic_app_catalog.h"
 #include "mosaic_hub_actions.h"
+#include "mosaic_i18n.h"
 #include "mosaic_runtime.h"
 
 #include "breakout_actions.h"
 #include "breakout_binds.h"
 #include "breakout_objects.h"
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 
 #define BREAKOUT_APP_ID       43U
 
@@ -212,13 +216,13 @@ static void render(esp_gsp_handle_t ui, bool force)
     }
     if (force || s_game.score != s_game.last_score) {
         char buf[24];
-        snprintf(buf, sizeof(buf), "SCORE %d", s_game.score);
+        snprintf(buf, sizeof(buf), TR("SCORE %d", "得分 %d"), s_game.score);
         (void)esp_gsp_set_text(ui, GSP_BIND_GAME_SCORE, buf);
         s_game.last_score = s_game.score;
     }
     if (force || s_game.lives != s_game.last_lives) {
         char buf[24];
-        snprintf(buf, sizeof(buf), "LIVES %d", s_game.lives);
+        snprintf(buf, sizeof(buf), TR("LIVES %d", "生命 %d"), s_game.lives);
         (void)esp_gsp_set_text(ui, GSP_BIND_GAME_LIVES, buf);
         s_game.last_lives = s_game.lives;
     }
@@ -226,10 +230,13 @@ static void render(esp_gsp_handle_t ui, bool force)
         const bool overlay = s_game.state != ST_PLAYING;
         (void)esp_gsp_set_visible(ui, GSP_BIND_GAME_OVERLAY_VISIBLE, overlay);
         if (overlay) {
-            const char *msg = s_game.state == ST_WON ? "YOU WIN"
-                : s_game.state == ST_LOST ? "GAME OVER" : "TAP TO START";
+            const char *msg = s_game.state == ST_WON ?
+                TR("YOU WIN", "你赢了")
+                : s_game.state == ST_LOST ?
+                TR("GAME OVER", "游戏结束") : TR("TAP TO START", "点击开始");
             const char *hint = s_game.state == ST_READY
-                ? "Drag to move the paddle" : "Tap to play again";
+                ? TR("Drag to move the paddle", "拖动以移动挡板")
+                : TR("Tap to play again", "点击再玩一次");
             (void)esp_gsp_set_text(ui, GSP_BIND_GAME_MESSAGE, msg);
             (void)esp_gsp_set_text(ui, GSP_BIND_GAME_HINT, hint);
         }

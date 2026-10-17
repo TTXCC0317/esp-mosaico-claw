@@ -24,6 +24,7 @@ idf_component_register(
          "common/mosaic_system_flow.c"
          "common/mosaic_app_shell.c"
          "common/mosaic_app_shell_titles.c"
+         "common/mosaic_i18n.c"
          "common/mosaic_settings_model.c"
          "common/works_runtime.c"
          "common/mosaic_top_notice.c"

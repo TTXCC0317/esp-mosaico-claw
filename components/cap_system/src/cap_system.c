@@ -512,6 +512,7 @@ static cJSON *cap_system_build_info_json(void)
     cJSON_AddItemToObject(root, "wifi", cap_system_build_wifi_json());
     cJSON_AddItemToObject(root, "ip", cap_system_build_ip_json());
     (void)cap_system_add_platform_section(root, "identity");
+    (void)cap_system_add_platform_section(root, "apps");
     (void)cap_system_add_platform_section(root, "battery");
     (void)cap_system_add_platform_section(root, "display");
     (void)cap_system_add_platform_section(root, "audio");
@@ -677,6 +678,9 @@ static esp_err_t cap_system_build_selected_info_json(const cJSON *sections, char
     }
     if (cap_system_section_is_requested(sections, "identity")) {
         ESP_GOTO_ON_ERROR(cap_system_add_platform_section(root, "identity"), cleanup, TAG, "Failed to add identity section");
+    }
+    if (cap_system_section_is_requested(sections, "apps")) {
+        ESP_GOTO_ON_ERROR(cap_system_add_platform_section(root, "apps"), cleanup, TAG, "Failed to add apps section");
     }
     if (cap_system_section_is_requested(sections, "battery")) {
         ESP_GOTO_ON_ERROR(cap_system_add_platform_section(root, "battery"), cleanup, TAG, "Failed to add battery section");
@@ -1121,6 +1125,8 @@ static esp_err_t cap_system_execute_control(const char *input_json,
     if (strcmp(operation, "set_display") == 0 ||
             strcmp(operation, "set_audio") == 0 ||
             strcmp(operation, "vibrate") == 0 ||
+            strcmp(operation, "open_app") == 0 ||
+            strcmp(operation, "go_back") == 0 ||
             strcmp(operation, "set_power_config") == 0) {
         err = cap_system_execute_platform(operation, input_json, output, output_size);
     } else {
@@ -1172,7 +1178,7 @@ static const claw_cap_descriptor_t s_system_descriptors[] = {
         .input_schema_json = "{\"type\":\"object\",\"properties\":{"
                              "\"operation\":{\"type\":\"string\",\"enum\":[\"get_system_info\",\"get_current_time\",\"scan_wifi_networks\"]},"
                              "\"sections\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"chip\",\"uptime\",\"version\","
-                             "\"memory\",\"cpu\",\"wifi\",\"ip\",\"identity\",\"battery\",\"display\",\"audio\",\"network\",\"power\"]},"
+                             "\"memory\",\"cpu\",\"wifi\",\"ip\",\"identity\",\"apps\",\"battery\",\"display\",\"audio\",\"network\",\"power\"]},"
                              "\"minItems\":1,\"uniqueItems\":true},"
                              "\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":30}},"
                              "\"required\":[\"operation\"],\"additionalProperties\":false}",
@@ -1183,11 +1189,14 @@ static const claw_cap_descriptor_t s_system_descriptors[] = {
         .name = "system_control",
         .family = "system",
         .description = "Control normal device functions using operation: set_display with brightness and/or rotation; set_audio with "
-                       "volume and/or muted; vibrate with duration_ms; set_power_config with profile.",
+                       "volume and/or muted; vibrate with duration_ms; set_power_config with profile; open_app with app to open an "
+                       "existing app screen by name (call system_query with sections [\"apps\"] to list the supported names; use "
+                       "\"mosaic-hub\" for the home screen); go_back to return to the previous screen.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
         .input_schema_json = "{\"type\":\"object\",\"properties\":{"
-                             "\"operation\":{\"type\":\"string\",\"enum\":[\"set_display\",\"set_audio\",\"vibrate\",\"set_power_config\"]},"
+                             "\"operation\":{\"type\":\"string\",\"enum\":[\"set_display\",\"set_audio\",\"vibrate\",\"set_power_config\",\"open_app\",\"go_back\"]},"
+                             "\"app\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":24},"
                              "\"brightness\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},"
                              "\"rotation\":{\"type\":\"integer\",\"enum\":[0,90,180,270]},"
                              "\"volume\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},"

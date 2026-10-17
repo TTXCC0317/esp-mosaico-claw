@@ -55,7 +55,7 @@ typedef struct {
 } weather_service_snapshot_t;
 
 typedef struct {
-    /** MET Norway requires an identifiable User-Agent with real contact info. */
+    /** Identifiable User-Agent sent to the upstream weather service. */
     const char *user_agent;
     /** Successful refresh cadence. Zero selects one hour. */
     uint32_t refresh_interval_ms;
@@ -66,8 +66,22 @@ typedef struct {
 typedef void (*weather_service_event_cb_t)(
     const weather_service_snapshot_t *snapshot, void *user_ctx);
 
+/** Fixed location override used when IP geolocation is unreliable. */
+typedef struct {
+    bool enabled;
+    double latitude;
+    double longitude;
+    char city[WEATHER_SERVICE_CITY_LEN];
+    char region[WEATHER_SERVICE_REGION_LEN];
+} weather_service_location_t;
+
 /** Initialize the singleton service and load its normalized NVS cache. */
 esp_err_t weather_service_init(const weather_service_config_t *config);
+
+/** Override IP geolocation with a fixed city. Passing NULL (or enabled=false)
+ * restores IP-based detection. The change applies on the next refresh. */
+esp_err_t weather_service_set_manual_location(
+    const weather_service_location_t *location);
 
 /** Erase the persisted weather cache. Call before init or after stop. */
 esp_err_t weather_service_erase_cache(void);

@@ -15,9 +15,11 @@
 
 #include "camera_binds.h"
 #include "camera_vision.h"
+#include "mosaic_i18n.h"
 #if defined(ESP_PLATFORM)
 #include "driver/jpeg_encode.h"
 #include "driver/ppa.h"
+#include "esp_cache.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -28,6 +30,9 @@
 #include "linux/videodev2.h"
 #include "mosaico_camera_service.h"
 #include "mosaico_module_camera.h"
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 #endif
 
 #define MOSAIC_CAMERA_W 480U
@@ -468,7 +473,71 @@ static esp_err_t camera_convert_frame(
         .mirror_x = mirror_y,
         .mode = PPA_TRANS_MODE_BLOCKING,
     };
-    return ppa_do_scale_rotate_mirror(ppa, &operation);
+
+    /* Make the camera input frame visible to the PPA DMA engine. */
+    esp_err_t msync_ret = esp_cache_msync(
+        (void *)frame->data, frame->size,
+        ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+    if (msync_ret != ESP_OK) {
+        ESP_LOGE(TAG, "failed to sync camera frame: %s",
+                 esp_err_to_name(msync_ret));
+        return msync_ret;
+    }
+    /* Clean the output buffer before the PPA writes into it. */
+    msync_ret = esp_cache_msync(
+        (void *)output, MOSAIC_CAMERA_FRAME_BYTES,
+        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    if (msync_ret != ESP_OK) {
+        ESP_LOGE(TAG, "failed to clean PPA output buffer: %s",
+                 esp_err_to_name(msync_ret));
+        return msync_ret;
+    }
+
+    const esp_err_t ppa_ret = ppa_do_scale_rotate_mirror(ppa, &operation);
+    if (ppa_ret != ESP_OK) {
+        return ppa_ret;
+    }
+
+    /* Invalidate the output buffer so later CPU/GSP reads see PPA's writes. */
+    msync_ret = esp_cache_msync(
+        (void *)output, MOSAIC_CAMERA_FRAME_BYTES,
+        ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+    if (msync_ret != ESP_OK) {
+        ESP_LOGE(TAG, "failed to invalidate PPA output buffer: %s",
+                 esp_err_to_name(msync_ret));
+        return msync_ret;
+    }
+
+    static bool s_ppa_diag_done = false;
+    if (!s_ppa_diag_done) {
+        s_ppa_diag_done = true;
+        const uint16_t *pixels = (const uint16_t *)output;
+        const size_t total_pixels = MOSAIC_CAMERA_FRAME_BYTES / sizeof(uint16_t);
+        const size_t sample_step = 64U;
+        uint32_t r_sum = 0;
+        uint32_t g_sum = 0;
+        uint32_t b_sum = 0;
+        uint32_t samples = 0;
+        uint32_t nonzero = 0;
+        for (size_t i = 0; i < total_pixels; i += sample_step) {
+            const uint16_t value = pixels[i];
+            if (value != 0U) {
+                nonzero++;
+            }
+            r_sum += (value >> 11) & 0x1FU;
+            g_sum += (value >> 5) & 0x3FU;
+            b_sum += value & 0x1FU;
+            samples++;
+        }
+        const uint32_t avg_r = samples > 0U ? r_sum / samples : 0U;
+        const uint32_t avg_g = samples > 0U ? g_sum / samples : 0U;
+        const uint32_t avg_b = samples > 0U ? b_sum / samples : 0U;
+        ESP_LOGW(TAG, "PPA diag: rgb565 avg R=%u G=%u B=%u (sampled)",
+                 (unsigned)avg_r, (unsigned)avg_g, (unsigned)avg_b);
+        ESP_LOGW(TAG, "PPA diag: nonzero=%u/%u",
+                 (unsigned)nonzero, (unsigned)samples);
+    }
+    return ppa_ret;
 }
 
 static bool camera_take_capture_request(
@@ -531,11 +600,11 @@ static void camera_update_recognition_result(esp_gsp_handle_t ui, const camera_v
     }
     if (result->mode == CAMERA_VISION_MODE_QRCODE) {
         (void)esp_gsp_set_text(ui, GSP_BIND_CAMERA_RECOGNITION_RESULT_TEXT,
-                               result->qrcodes[0].payload[0] != '\0' ? result->qrcodes[0].payload : "QR code detected");
+                               result->qrcodes[0].payload[0] != '\0' ? result->qrcodes[0].payload : TR("QR code detected", "检测到二维码"));
     } else if (result->mode == CAMERA_VISION_MODE_COLOR) {
-        (void)esp_gsp_set_text(ui, GSP_BIND_CAMERA_RECOGNITION_RESULT_TEXT, "Green color detected");
+        (void)esp_gsp_set_text(ui, GSP_BIND_CAMERA_RECOGNITION_RESULT_TEXT, TR("Green color detected", "检测到绿色"));
     } else if (result->mode == CAMERA_VISION_MODE_MOTION) {
-        (void)esp_gsp_set_text(ui, GSP_BIND_CAMERA_RECOGNITION_RESULT_TEXT, "Motion detected");
+        (void)esp_gsp_set_text(ui, GSP_BIND_CAMERA_RECOGNITION_RESULT_TEXT, TR("Motion detected", "检测到运动"));
     }
 }
 

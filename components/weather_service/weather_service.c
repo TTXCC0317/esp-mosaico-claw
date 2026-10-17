@@ -30,9 +30,15 @@
 #define WEATHER_IP_URL                                                                             \
     "http://ip-api.com/json/?fields=status,message,query,lat,lon,city,"                            \
     "regionName,countryCode,timezone&lang=en"
-#define WEATHER_MET_URL_FORMAT                                                                     \
-    "https://api.met.no/weatherapi/locationforecast/2.0/"                                          \
-    "compact?lat=%.4f&lon=%.4f"
+/* Open-Meteo forecast; no API key required and it carries the CMA/ECMWF
+ * models, which track conditions over China more closely than a global-only
+ * source. Coordinates are sent at four decimals. The response is mapped onto
+ * the MET Norway style symbol names the UI already understands. */
+#define WEATHER_FORECAST_URL_FORMAT                                                                \
+    "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"                          \
+    "&current=temperature_2m,weather_code"                                                         \
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min"                                    \
+    "&timezone=auto&forecast_days=7"
 
 #define WEATHER_DEFAULT_REFRESH_MS (60U * 60U * 1000U)
 #define WEATHER_DEFAULT_STALE_MS   (6U * 60U * 60U * 1000U)
@@ -96,6 +102,7 @@ typedef struct {
     weather_service_snapshot_t snapshot;
     weather_observer_t observers[WEATHER_SERVICE_SUBSCRIBER_MAX];
     char last_modified[WEATHER_HEADER_LEN];
+    weather_service_location_t manual_location;
     bool initialized;
     bool running;
     bool connected;
@@ -389,13 +396,67 @@ static const char *weather_condition_for_symbol(const char *symbol)
     return "Weather";
 }
 
-static const char *weather_summary_symbol(cJSON *data, const char *period)
+/* Map a WMO weather interpretation code (Open-Meteo) onto the MET Norway
+ * style symbol names that weather_condition_for_symbol() and the Weather app
+ * already recognise. */
+static const char *weather_symbol_for_wmo(int code)
 {
-    cJSON *period_data = cJSON_GetObjectItemCaseSensitive(data, period);
-    cJSON *summary = cJSON_IsObject(period_data)
-                         ? cJSON_GetObjectItemCaseSensitive(period_data, "summary")
-                         : NULL;
-    return cJSON_IsObject(summary) ? weather_json_string(summary, "symbol_code") : NULL;
+    switch (code) {
+    case 0:  return "clearsky_day";
+    case 1:  return "fair_day";
+    case 2:  return "partlycloudy_day";
+    case 45:
+    case 48: return "fog";
+    case 51:
+    case 53:
+    case 55: return "lightrain";
+    case 56:
+    case 57: return "sleet";
+    case 61: return "lightrain";
+    case 63: return "rain";
+    case 65: return "heavyrain";
+    case 66:
+    case 67: return "sleet";
+    case 71: return "lightsnow";
+    case 73: return "snow";
+    case 75: return "heavysnow";
+    case 77: return "snow";
+    case 80: return "lightrainshowers";
+    case 81: return "rainshowers";
+    case 82: return "heavyrainshowers";
+    case 85: return "lightsnowshowers";
+    case 86: return "snowshowers";
+    case 95:
+    case 96:
+    case 99: return "thunderstorm";
+    default: return "cloudy";
+    }
+}
+
+static int weather_json_int(cJSON *value)
+{
+    return cJSON_IsNumber(value) ? (int)lround(value->valuedouble) : -1;
+}
+
+/* Convert Open-Meteo's ISO "YYYY-MM-DD" day key into the UI's "MM/DD" label. */
+static bool weather_parse_day_key(const char *value, char out[WEATHER_SERVICE_DATE_LEN])
+{
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    if (value == NULL || out == NULL ||
+            sscanf(value, "%d-%d-%d", &year, &month, &day) != 3 ||
+            month < 1 || month > 12 || day < 1 || day > 31) {
+        return false;
+    }
+    (void)year;
+    out[0] = (char)('0' + month / 10);
+    out[1] = (char)('0' + month % 10);
+    out[2] = '/';
+    out[3] = (char)('0' + day / 10);
+    out[4] = (char)('0' + day % 10);
+    out[5] = '\0';
+    return true;
 }
 
 static void weather_day_add_temperature(weather_service_day_t *day,
@@ -416,76 +477,6 @@ static void weather_day_add_temperature(weather_service_day_t *day,
     }
 }
 
-static void weather_day_add_period_extrema(weather_service_day_t *day,
-                                           cJSON *data,
-                                           const char *period)
-{
-    cJSON *period_data = cJSON_GetObjectItemCaseSensitive(data, period);
-    cJSON *details = cJSON_IsObject(period_data)
-                         ? cJSON_GetObjectItemCaseSensitive(period_data, "details")
-                         : NULL;
-    if (!cJSON_IsObject(details)) return;
-    cJSON *minimum = cJSON_GetObjectItemCaseSensitive(details,
-                                                       "air_temperature_min");
-    cJSON *maximum = cJSON_GetObjectItemCaseSensitive(details,
-                                                       "air_temperature_max");
-    if (cJSON_IsNumber(minimum)) {
-        weather_day_add_temperature(day, minimum->valuedouble);
-    }
-    if (cJSON_IsNumber(maximum)) {
-        weather_day_add_temperature(day, maximum->valuedouble);
-    }
-}
-
-/* Convert a UTC civil date to Unix days without relying on timegm(), which is
- * not consistently available across all supported ESP-IDF/newlib builds. */
-static int64_t weather_days_from_civil(int year, unsigned month, unsigned day)
-{
-    year -= month <= 2U;
-    const int era = (year >= 0 ? year : year - 399) / 400;
-    const unsigned yoe = (unsigned)(year - era * 400);
-    const unsigned adjusted_month = month > 2U ? month - 3U : month + 9U;
-    const unsigned doy = (153U * adjusted_month + 2U) / 5U + day - 1U;
-    const unsigned doe = yoe * 365U + yoe / 4U - yoe / 100U + doy;
-    return (int64_t)era * 146097 + (int64_t)doe - 719468;
-}
-
-static bool weather_parse_time(const char *value, time_t *ret_time)
-{
-    int year, month, day, hour, minute, second;
-    if (value == NULL || ret_time == NULL ||
-            sscanf(value, "%d-%d-%dT%d:%d:%dZ", &year, &month, &day,
-                   &hour, &minute, &second) != 6 ||
-            month < 1 || month > 12 || day < 1 || day > 31 ||
-            hour < 0 || hour > 23 || minute < 0 || minute > 59 ||
-            second < 0 || second > 60) {
-        return false;
-    }
-    *ret_time = (time_t)(weather_days_from_civil(year, (unsigned)month,
-                                                  (unsigned)day) * 86400 +
-                         hour * 3600 + minute * 60 + second);
-    return true;
-}
-
-static void weather_prepare_days(weather_service_snapshot_t *snapshot,
-                                 struct tm keys[WEATHER_SERVICE_FORECAST_DAYS])
-{
-    const time_t now = time(NULL);
-    memset(snapshot->forecast, 0, sizeof(snapshot->forecast));
-    for (size_t i = 0; i < WEATHER_SERVICE_FORECAST_DAYS; ++i) {
-        const time_t value = now + (time_t)i * 86400;
-        localtime_r(&value, &keys[i]);
-        const unsigned month = (unsigned)(keys[i].tm_mon + 1);
-        const unsigned day = (unsigned)keys[i].tm_mday;
-        snapshot->forecast[i].date[0] = (char)('0' + month / 10U);
-        snapshot->forecast[i].date[1] = (char)('0' + month % 10U);
-        snapshot->forecast[i].date[2] = '/';
-        snapshot->forecast[i].date[3] = (char)('0' + day / 10U);
-        snapshot->forecast[i].date[4] = (char)('0' + day % 10U);
-        snapshot->forecast[i].date[5] = '\0';
-    }
-}
-
 static esp_err_t weather_parse_forecast(const char *json, weather_service_snapshot_t *snapshot)
 {
     ESP_RETURN_ON_FALSE(json != NULL && snapshot != NULL, ESP_ERR_INVALID_ARG, TAG,
@@ -494,92 +485,57 @@ static esp_err_t weather_parse_forecast(const char *json, weather_service_snapsh
     ESP_RETURN_ON_FALSE(root != NULL, ESP_ERR_INVALID_RESPONSE, TAG, "forecast JSON invalid");
 
     esp_err_t err = ESP_ERR_INVALID_RESPONSE;
-    cJSON *properties = cJSON_GetObjectItemCaseSensitive(root, "properties");
-    cJSON *timeseries = cJSON_IsObject(properties)
-                            ? cJSON_GetObjectItemCaseSensitive(properties, "timeseries")
-                            : NULL;
-    cJSON *entry = cJSON_IsArray(timeseries) ? cJSON_GetArrayItem(timeseries, 0) : NULL;
-    cJSON *data = cJSON_IsObject(entry) ? cJSON_GetObjectItemCaseSensitive(entry, "data") : NULL;
-    cJSON *instant =
-        cJSON_IsObject(data) ? cJSON_GetObjectItemCaseSensitive(data, "instant") : NULL;
-    cJSON *details =
-        cJSON_IsObject(instant) ? cJSON_GetObjectItemCaseSensitive(instant, "details") : NULL;
-    cJSON *temperature = cJSON_IsObject(details)
-                             ? cJSON_GetObjectItemCaseSensitive(details, "air_temperature")
+
+    cJSON *current = cJSON_GetObjectItemCaseSensitive(root, "current");
+    cJSON *temperature = cJSON_IsObject(current)
+                             ? cJSON_GetObjectItemCaseSensitive(current, "temperature_2m")
                              : NULL;
     if (cJSON_IsNumber(temperature) && isfinite(temperature->valuedouble) &&
-        temperature->valuedouble >= -100.0 && temperature->valuedouble <= 100.0) {
-        const char *symbol = weather_summary_symbol(data, "next_1_hours");
-        if (symbol == NULL) {
-            symbol = weather_summary_symbol(data, "next_6_hours");
-        }
-        if (symbol == NULL) {
-            symbol = weather_summary_symbol(data, "next_12_hours");
-        }
+            temperature->valuedouble >= -100.0 && temperature->valuedouble <= 100.0) {
         snapshot->temperature_c = (int16_t)lround(temperature->valuedouble);
-        strlcpy(snapshot->symbol_code, symbol != NULL ? symbol : "", sizeof(snapshot->symbol_code));
+        const char *symbol = weather_symbol_for_wmo(weather_json_int(
+            cJSON_IsObject(current)
+                ? cJSON_GetObjectItemCaseSensitive(current, "weather_code")
+                : NULL));
+        strlcpy(snapshot->symbol_code, symbol, sizeof(snapshot->symbol_code));
         strlcpy(snapshot->condition, weather_condition_for_symbol(symbol),
                 sizeof(snapshot->condition));
         snapshot->weather_valid = true;
         err = ESP_OK;
     }
 
-    if (cJSON_IsArray(timeseries) && weather_time_valid()) {
-        struct tm keys[WEATHER_SERVICE_FORECAST_DAYS] = {0};
-        int symbol_score[WEATHER_SERVICE_FORECAST_DAYS];
-        weather_prepare_days(snapshot, keys);
-        for (size_t i = 0; i < WEATHER_SERVICE_FORECAST_DAYS; ++i) {
-            symbol_score[i] = 25;
-        }
-        const int count = cJSON_GetArraySize(timeseries);
-        for (int index = 0; index < count; ++index) {
-            cJSON *item = cJSON_GetArrayItem(timeseries, index);
-            const char *timestamp = cJSON_IsObject(item)
-                                        ? weather_json_string(item, "time") : NULL;
-            time_t epoch;
-            struct tm local;
-            if (!weather_parse_time(timestamp, &epoch) ||
-                    localtime_r(&epoch, &local) == NULL) {
+    cJSON *daily = cJSON_GetObjectItemCaseSensitive(root, "daily");
+    cJSON *days = cJSON_IsObject(daily)
+                      ? cJSON_GetObjectItemCaseSensitive(daily, "time")
+                      : NULL;
+    if (cJSON_IsArray(days)) {
+        memset(snapshot->forecast, 0, sizeof(snapshot->forecast));
+        cJSON *highs = cJSON_GetObjectItemCaseSensitive(daily, "temperature_2m_max");
+        cJSON *lows = cJSON_GetObjectItemCaseSensitive(daily, "temperature_2m_min");
+        cJSON *codes = cJSON_GetObjectItemCaseSensitive(daily, "weather_code");
+        const int count = cJSON_GetArraySize(days);
+        for (int index = 0; index < count && index < (int)WEATHER_SERVICE_FORECAST_DAYS; ++index) {
+            weather_service_day_t *day = &snapshot->forecast[index];
+            if (!weather_parse_day_key(cJSON_GetStringValue(cJSON_GetArrayItem(days, index)),
+                                       day->date)) {
                 continue;
             }
-            size_t day_index = WEATHER_SERVICE_FORECAST_DAYS;
-            for (size_t i = 0; i < WEATHER_SERVICE_FORECAST_DAYS; ++i) {
-                if (local.tm_year == keys[i].tm_year &&
-                        local.tm_yday == keys[i].tm_yday) {
-                    day_index = i;
-                    break;
-                }
+            cJSON *high = cJSON_GetArrayItem(highs, index);
+            cJSON *low = cJSON_GetArrayItem(lows, index);
+            if (cJSON_IsNumber(high)) {
+                weather_day_add_temperature(day, high->valuedouble);
             }
-            if (day_index == WEATHER_SERVICE_FORECAST_DAYS) {
-                continue;
+            if (cJSON_IsNumber(low)) {
+                weather_day_add_temperature(day, low->valuedouble);
             }
-            cJSON *item_data = cJSON_GetObjectItemCaseSensitive(item, "data");
-            cJSON *item_instant = cJSON_IsObject(item_data)
-                                      ? cJSON_GetObjectItemCaseSensitive(item_data, "instant") : NULL;
-            cJSON *item_details = cJSON_IsObject(item_instant)
-                                      ? cJSON_GetObjectItemCaseSensitive(item_instant, "details") : NULL;
-            cJSON *item_temp = cJSON_IsObject(item_details)
-                                   ? cJSON_GetObjectItemCaseSensitive(item_details, "air_temperature") : NULL;
-            if (!cJSON_IsNumber(item_temp) || !isfinite(item_temp->valuedouble) ||
-                    item_temp->valuedouble < -100.0 || item_temp->valuedouble > 100.0) {
-                continue;
-            }
-            weather_service_day_t *day = &snapshot->forecast[day_index];
-            weather_day_add_temperature(day, item_temp->valuedouble);
-            weather_day_add_period_extrema(day, item_data, "next_6_hours");
-            weather_day_add_period_extrema(day, item_data, "next_12_hours");
-            const char *item_symbol = weather_summary_symbol(item_data, "next_1_hours");
-            if (item_symbol == NULL) item_symbol = weather_summary_symbol(item_data, "next_6_hours");
-            if (item_symbol == NULL) item_symbol = weather_summary_symbol(item_data, "next_12_hours");
-            const int score = abs(local.tm_hour - 12);
-            if (item_symbol != NULL && score < symbol_score[day_index]) {
-                symbol_score[day_index] = score;
-                strlcpy(day->symbol_code, item_symbol, sizeof(day->symbol_code));
-                strlcpy(day->condition, weather_condition_for_symbol(item_symbol),
-                        sizeof(day->condition));
-            }
+            const char *day_symbol = weather_symbol_for_wmo(
+                weather_json_int(cJSON_GetArrayItem(codes, index)));
+            strlcpy(day->symbol_code, day_symbol, sizeof(day->symbol_code));
+            strlcpy(day->condition, weather_condition_for_symbol(day_symbol),
+                    sizeof(day->condition));
         }
     }
+
     cJSON_Delete(root);
     return err;
 }
@@ -714,15 +670,15 @@ static esp_err_t weather_fetch_forecast(weather_service_snapshot_t *snapshot,
                                         const char *if_modified, char *ret_last_modified,
                                         size_t ret_last_modified_size, bool *ret_not_modified)
 {
-    char url[192];
+    char url[256];
     int written =
-        snprintf(url, sizeof(url), WEATHER_MET_URL_FORMAT, snapshot->latitude, snapshot->longitude);
+        snprintf(url, sizeof(url), WEATHER_FORECAST_URL_FORMAT, snapshot->latitude, snapshot->longitude);
     ESP_RETURN_ON_FALSE(written > 0 && (size_t)written < sizeof(url), ESP_ERR_INVALID_SIZE, TAG,
                         "forecast URL too long");
 
     weather_http_response_t response = {0};
     ESP_RETURN_ON_ERROR(weather_http_get(url, if_modified, true, &response), TAG,
-                        "MET Norway request failed");
+                        "Open-Meteo request failed");
     *ret_not_modified = response.status_code == 304;
     if (response.last_modified[0] != '\0') {
         strlcpy(ret_last_modified, response.last_modified, ret_last_modified_size);
@@ -732,7 +688,7 @@ static esp_err_t weather_fetch_forecast(weather_service_snapshot_t *snapshot,
         return ESP_OK;
     }
     if (response.status_code != 200) {
-        ESP_LOGW(TAG, "MET Norway HTTP status %d", response.status_code);
+        ESP_LOGW(TAG, "Open-Meteo HTTP status %d", response.status_code);
         weather_http_response_free(&response);
         return response.status_code == 429 ? ESP_ERR_TIMEOUT : ESP_FAIL;
     }
@@ -762,7 +718,24 @@ static esp_err_t weather_refresh_once(void)
     const double old_latitude = next.latitude;
     const double old_longitude = next.longitude;
     const bool had_location = next.location_valid;
-    esp_err_t location_err = weather_fetch_location(&next);
+    weather_service_location_t manual = {0};
+    if (xSemaphoreTake(s_service.lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    manual = s_service.manual_location;
+    xSemaphoreGive(s_service.lock);
+    esp_err_t location_err;
+    if (manual.enabled && weather_location_valid(manual.latitude, manual.longitude)) {
+        next.latitude = manual.latitude;
+        next.longitude = manual.longitude;
+        next.location_valid = true;
+        strlcpy(next.city, manual.city, sizeof(next.city));
+        strlcpy(next.region, manual.region, sizeof(next.region));
+        next.public_ip[0] = '\0';
+        location_err = ESP_OK;
+    } else {
+        location_err = weather_fetch_location(&next);
+    }
     if (location_err != ESP_OK && !had_location) {
         next.last_error = location_err;
         next.stale = next.weather_valid;
@@ -924,6 +897,30 @@ esp_err_t weather_service_init(const weather_service_config_t *config)
     s_service.snapshot.last_error = ESP_ERR_INVALID_STATE;
     weather_cache_load();
     s_service.initialized = true;
+    return ESP_OK;
+}
+
+esp_err_t weather_service_set_manual_location(
+    const weather_service_location_t *location)
+{
+    ESP_RETURN_ON_FALSE(s_service.initialized, ESP_ERR_INVALID_STATE, TAG,
+                        "service is not initialized");
+    if (xSemaphoreTake(s_service.lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (location != NULL && location->enabled) {
+        s_service.manual_location = *location;
+        s_service.manual_location.enabled = true;
+        s_service.manual_location.city[sizeof(s_service.manual_location.city) - 1U] = '\0';
+        s_service.manual_location.region[sizeof(s_service.manual_location.region) - 1U] = '\0';
+    } else {
+        memset(&s_service.manual_location, 0, sizeof(s_service.manual_location));
+    }
+    TaskHandle_t task = s_service.task;
+    xSemaphoreGive(s_service.lock);
+    if (task != NULL) {
+        xTaskNotifyGive(task);
+    }
     return ESP_OK;
 }
 

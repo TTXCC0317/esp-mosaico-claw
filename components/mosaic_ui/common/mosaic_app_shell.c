@@ -15,7 +15,6 @@ static mosaic_app_shell_exit_fn s_exit;
 static void *s_exit_ctx;
 static esp_gsp_handle_t s_ui;
 static uint32_t s_root_stack_key;
-static const mosaic_app_shell_title_asset_t *s_title;
 static void *s_chrome_timer;
 static bool s_root_visible;
 static bool s_root_header_enabled;
@@ -136,17 +135,13 @@ static void draw_app_shell(esp_gsp_handle_t ui,
     if (ui != s_ui) {
         return;
     }
-    const uint32_t fg = UINT16_C(0xD6BB);
     if (s_root_visible && s_root_header_enabled) {
-        /* The orange key cap mirrors the HTML/device top Back key. */
-        const int32_t title_y = 26;
+        /* The orange key cap mirrors the HTML/device top Back key. The title
+         * itself is no longer blitted here: it is emitted as a scene label by
+         * the App bundle so runtime i18n can translate it and the CJK fallback
+         * font can render it. */
         (void)esp_gsp_overlay_builder_round_rect(
             builder, 16, 26, 22, 22, UINT16_C(0xFA60), 4, 255);
-        if (s_title != NULL) {
-            (void)esp_gsp_overlay_builder_glyph_a8(
-                builder, 52, title_y, s_title->width, s_title->height, fg,
-                s_title->a8, s_title->size, s_title->stride);
-        }
     }
     if (s_bottom_enabled) {
         (void)esp_gsp_overlay_builder_round_rect(
@@ -251,17 +246,17 @@ void mosaic_app_shell_set_exit_handler(
 void mosaic_app_shell_attach(esp_gsp_handle_t ui, uint32_t root_stack_key,
                              const char *title, bool root_header_enabled)
 {
-    const mosaic_app_shell_title_asset_t *asset =
-        mosaic_app_shell_title_asset(title);
     /* Full-canvas Apps such as Bluetooth intentionally suppress the shared
      * header. They still need the bottom home indicator and its upward-exit
-     * interceptor even when no title bitmap was generated for their title. */
+     * interceptor even though they declare no title. The title text itself is
+     * owned by the App scene bundle (see app_root_shell in scene_common.py),
+     * which is what makes it language-aware. */
+    (void)title;
     if (ui == NULL) {
         return;
     }
     s_ui = ui;
     s_root_stack_key = root_stack_key;
-    s_title = asset;
     s_root_override_valid = false;
     s_root_header_enabled = root_header_enabled;
     s_root_visible = root_visible(ui);
@@ -387,7 +382,6 @@ void mosaic_app_shell_detach(esp_gsp_handle_t ui)
     if (ui == s_ui) {
         s_ui = NULL;
         s_root_stack_key = 0;
-        s_title = NULL;
         s_root_visible = false;
         s_root_override_valid = false;
         s_bottom_enabled = false;

@@ -281,9 +281,12 @@ esp_err_t music_controller_step(
     if (audio_status.duration_ms > 0) {
         track->duration_ms = audio_status.duration_ms;
     }
-    if (controller->position_ms != audio_status.position_ms ||
-        controller->state != state) {
-        controller->position_ms = audio_status.position_ms;
+    int64_t position = audio_status.position_ms;
+    if (track->duration_ms > 0 && position > track->duration_ms) {
+        position = track->duration_ms;
+    }
+    if (controller->position_ms != position || controller->state != state) {
+        controller->position_ms = position;
         controller->state = state;
         changed(controller);
     }

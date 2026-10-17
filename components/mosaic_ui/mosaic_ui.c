@@ -347,6 +347,27 @@ esp_err_t mosaic_ui_open_ai_create(void)
     return mosaic_loader_request(app);
 }
 
+esp_err_t mosaic_ui_open_app(const char *app_name)
+{
+    if (app_name == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const mosaic_app_descriptor_t *app = mosaic_app_descriptor_for_name(app_name);
+    if (app == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    return mosaic_loader_request(app);
+}
+
+bool mosaic_ui_active_app_is(const char *app_name)
+{
+    if (app_name == NULL) {
+        return false;
+    }
+    const mosaic_app_descriptor_t *app = mosaic_loader_app();
+    return app != NULL && app->name != NULL && strcmp(app->name, app_name) == 0;
+}
+
 static esp_err_t present_quiesce(void *ctx, uint32_t timeout_ms)
 {
     (void)ctx;

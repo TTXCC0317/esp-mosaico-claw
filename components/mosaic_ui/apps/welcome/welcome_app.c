@@ -5,9 +5,11 @@
 
 #include "esp_gsp.h"
 #include "mosaic_app_catalog.h"
+#include "mosaic_i18n.h"
 #include "mosaic_runtime.h"
 #include "welcome_intro_actions.h"
 #include "welcome_intro_objects.h"
+#undef GSP_OBJ_WELCOME_RUNTIME_TEXT
 #include "welcome_keys_objects.h"
 #undef GSP_OBJ_WELCOME_RUNTIME_TEXT
 #include "welcome_g1_objects.h"
@@ -15,6 +17,11 @@
 #undef GSP_OBJ_GESTURE_HAND_VALUE
 #undef GSP_OBJ_WELCOME_RUNTIME_TEXT
 #include "welcome_g4_objects.h"
+
+/* The guide pages bake their English text; the C layer swaps in Chinese on
+ * demand.  Every scene keeps its own components, so the strings are applied
+ * page by page. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 
 #define WELCOME_PAGE_COUNT 5U
 #define WELCOME_PAGE_DURATION_US 3000000LL
@@ -182,6 +189,67 @@ static void welcome_hand_step(int64_t now_us)
     welcome_hand_start(now_us);
 }
 
+static void welcome_apply_i18n(uint16_t page)
+{
+    if (s_ui == NULL) {
+        return;
+    }
+    switch (page) {
+    case 0U:
+        (void)gsp_welcome_intro_i18n_welcome_intro_title1_set_text(
+            s_ui, TR("Welcome To", "欢迎使用"));
+        (void)gsp_welcome_intro_i18n_welcome_intro_subtitle_set_text(
+            s_ui, TR("Discover buttons and gestures", "了解按键与手势"));
+        (void)gsp_welcome_intro_i18n_welcome_intro_skip_set_text(
+            s_ui, TR("Skip Guide  ›", "跳过引导 ›"));
+        break;
+    case 1U:
+        (void)gsp_welcome_keys_i18n_welcome_keys_single_click_set_text(
+            s_ui, TR("Single-click", "单击"));
+        (void)gsp_welcome_keys_i18n_welcome_keys_sleep_go_back_set_text(
+            s_ui, TR("Sleep/Go back", "休眠/返回"));
+        (void)gsp_welcome_keys_i18n_welcome_keys_long_press_set_text(
+            s_ui, TR("Long-press", "长按"));
+        (void)gsp_welcome_keys_i18n_welcome_keys_chat_with_claw_set_text(
+            s_ui, TR("Chat with Claw", "与 Claw 对话"));
+        (void)gsp_welcome_keys_i18n_welcome_keys_boot_key_set_text(
+            s_ui, TR("Boot Key", "启动键"));
+        (void)gsp_welcome_keys_i18n_welcome_keys_boot_mode_set_text(
+            s_ui, TR("Boot Mode", "启动模式"));
+        (void)gsp_welcome_keys_i18n_welcome_keys_power_key_set_text(
+            s_ui, TR("Power Key", "电源键"));
+        (void)gsp_welcome_keys_i18n_welcome_keys_power_off_on_set_text(
+            s_ui, TR("Power Off/On", "关机/开机"));
+        break;
+    case 2U:
+        (void)gsp_welcome_g1_i18n_welcome_g1_direction_set_text(
+            s_ui, TR("Swipe down", "下滑"));
+        (void)gsp_welcome_g1_i18n_welcome_g1_title_set_text(
+            s_ui, TR("Open Control Center", "打开控制中心"));
+        (void)gsp_welcome_g1_i18n_welcome_g1_skip_set_text(
+            s_ui, TR("Skip Guide  ›", "跳过引导 ›"));
+        break;
+    case 3U:
+        (void)gsp_welcome_g2_i18n_welcome_g2_direction_set_text(
+            s_ui, TR("Swipe up", "上滑"));
+        (void)gsp_welcome_g2_i18n_welcome_g2_title_set_text(
+            s_ui, TR("Back to Home", "返回主屏"));
+        (void)gsp_welcome_g2_i18n_welcome_g2_skip_set_text(
+            s_ui, TR("Skip Guide  ›", "跳过引导 ›"));
+        break;
+    case 4U:
+        (void)gsp_welcome_g4_i18n_welcome_g4_direction_set_text(
+            s_ui, TR("Swipe left/right", "左右滑动"));
+        (void)gsp_welcome_g4_i18n_welcome_g4_title_set_text(
+            s_ui, TR("Switch screens", "切换屏幕"));
+        (void)gsp_welcome_g4_i18n_welcome_g4_start_set_text(
+            s_ui, TR("Get Started!", "开始吧！"));
+        break;
+    default:
+        break;
+    }
+}
+
 static void welcome_show(uint16_t page, int64_t now_us)
 {
     if (s_ui == NULL || page >= WELCOME_PAGE_COUNT) {
@@ -213,6 +281,7 @@ static void welcome_event(
         s_hand_next_us = 0;
         s_hand_origin_valid = false;
         s_arrow_origin_valid = false;
+        welcome_apply_i18n(0U);
         break;
     case MOSAIC_EVENT_UI_CALL:
         if (event->data.call.action_id == GSP_ACT_ID_WELCOME_NEXT &&
@@ -227,6 +296,7 @@ static void welcome_event(
             s_hand_origin_valid = false;
             s_arrow_origin_valid = false;
             welcome_hand_start(event->timestamp_us);
+            welcome_apply_i18n(s_page);
         }
         break;
     case MOSAIC_EVENT_TIMER:

@@ -8,8 +8,12 @@
 #include <string.h>
 #include <time.h>
 
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
+
 #include "mosaic_app_catalog.h"
 #include "mosaic_hub_actions.h"
+#include "mosaic_i18n.h"
 #include "weather_binds.h"
 #include "weather_forecast_icon_data.h"
 #include "weather_objects.h"
@@ -185,8 +189,9 @@ static void weather_render(esp_gsp_handle_t ui,
         (void)gsp_weather_weather_forecast_list_refresh(ui, s_forecast_list);
     }
     (void)esp_gsp_set_text(ui, GSP_BIND_WEATHER_STATUS,
-                          snapshot->stale ? "CACHED" :
-                          snapshot->online ? "LIVE" : "OFFLINE");
+                          snapshot->stale ? TR("CACHED", "缓存") :
+                          snapshot->online ? TR("LIVE", "实时") :
+                                             TR("OFFLINE", "离线"));
 
     const char *symbol = snapshot->symbol_code;
     const bool thunder = strstr(symbol, "thunder") != NULL ||

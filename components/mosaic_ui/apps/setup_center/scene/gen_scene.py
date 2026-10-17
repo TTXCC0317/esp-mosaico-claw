@@ -339,9 +339,12 @@ def build_network(objs, parent):
     objs.append(layer(parent, 0, 0, 480, 480, hidden=True,
                       name="setup_network_phone",
                       bind="setup_network_phone_visible"))
+    # Tap target on a plain container so the "Skip" label keeps its i18n bind
+    # (gspc drops the hit region of a bound label).
+    objs.append(container(phone, 384, 8, 72, 48, bg=BG,
+                          callback="setup_network_phone_cancel"))
     objs.append(label(phone, 384, 8, 72, 48, "Skip", size=24,
-                      color=ACCENT, align="right",
-                      callback="setup_network_phone_cancel"))
+                      color=ACCENT, align="right"))
     objs.append(label(phone, 24, 56, 432, 54, "Wi-Fi Setup", size=34))
     objs.append(label(phone, 24, 108, 432, 32,
                       "Scan with your phone to join", size=24,
@@ -353,9 +356,12 @@ def build_network(objs, parent):
                       color=MUTED, align="center",
                       name="setup_network_phone_ap_ssid",
                       bind="setup_network_phone_ap_ssid"))
+    # Hit region on a container so the "Submitted on phone" label keeps its
+    # i18n bind.
+    objs.append(container(phone, 0, 442, 480, 30, bg=BG,
+                          callback="setup_network_phone_submitted"))
     objs.append(label(phone, 0, 442, 480, 30, "Submitted on phone", size=20,
-                      color=ACCENT, align="center",
-                      callback="setup_network_phone_submitted"))
+                      color=ACCENT, align="center"))
 
     joining = len(objs)
     objs.append(layer(parent, 0, 0, 480, 480, hidden=True,
@@ -424,9 +430,14 @@ def qr_page(objs, parent, *, title, subtitle, back_action,
         objs.append(label(parent, 24, code_y, 432, 28, code_label, size=20,
                           color=MUTED, align="center"))
     if prompt:
+        # Keep the prompt label's i18n bind by putting its tap region on a
+        # sibling container (gspc drops a bound label's own hit region).
+        if prompt_action:
+            objs.append(container(parent, 24, 442, 432, 32, bg=BG,
+                                  callback=prompt_action))
         objs.append(label(parent, 24, 442, 432, 32, prompt, size=20,
                           color=ACCENT, align="center",
-                          callback=prompt_action, bind=prompt_bind,
+                          bind=prompt_bind,
                           name=prompt_bind))
 
 
@@ -532,17 +543,21 @@ def build_llm(objs, parent):
     success_screen(objs, success, title="LLM Ready",
                    detail="OpenAI Compatible", action="setup_llm_continue",
                    action_text="Continue")
+    # Last, below the shared card/QR region.
+    objs.append(container(success, 64, 454, 352, 26, bg=BG,
+                          callback="setup_llm_reconfigure"))
     objs.append(label(success, 64, 454, 352, 26, "Reconfigure", size=20,
-                      color=MUTED, align="center",
-                      callback="setup_llm_reconfigure"))
+                      color=MUTED, align="center"))
 
 
 def build_done(objs, parent):
     success_screen(objs, parent, title="Setup Complete",
                    detail="Your Mosaico is ready",
                    action="setup_center_close", action_text="Continue")
+    objs.append(container(parent, 64, 448, 352, 28, bg=BG,
+                          callback="setup_view_status"))
     objs.append(label(parent, 64, 448, 352, 28, "View setup status", size=20,
-                      color=MUTED, align="center", callback="setup_view_status"))
+                      color=MUTED, align="center"))
 
 
 def main():

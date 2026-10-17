@@ -14,6 +14,8 @@ extern "C" {
 
 #define APP_CONFIG_STR_LEN        320
 #define APP_CONFIG_TIMEZONE_LEN   32
+#define APP_CONFIG_WEATHER_CITY_LEN 8
+#define APP_CONFIG_LANGUAGE_LEN   8
 
 #define APP_WIFI_SSID             CONFIG_APP_WIFI_SSID
 #define APP_WIFI_PASSWORD         CONFIG_APP_WIFI_PASSWORD
@@ -61,6 +63,10 @@ typedef struct {
     char llm_visible_cap_groups[APP_CONFIG_STR_LEN];
     char enabled_lua_modules[APP_CONFIG_STR_LEN];
     char time_timezone[APP_CONFIG_TIMEZONE_LEN];
+    /** UI language tag: "en" (default) or "zh". Applied after a reboot. */
+    char language[APP_CONFIG_LANGUAGE_LEN];
+    /** Selected weather city preset index as text; empty selects IP lookup. */
+    char weather_city[APP_CONFIG_WEATHER_CITY_LEN];
 } app_config_t;
 
 esp_err_t app_config_init(void);

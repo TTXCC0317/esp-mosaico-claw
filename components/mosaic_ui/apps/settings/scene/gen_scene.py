@@ -24,6 +24,7 @@ sys.path.insert(0, str(HERE.parent.parent.parent / "common"))
 from scene_common import (  # noqa: E402
     CONTENT_H,
     CONTENT_W,
+    app_root_shell,
     asset_scene,
     auto_charset,
     button,
@@ -139,6 +140,7 @@ IMAGES: list[tuple[str, int, int]] = [
     (SLIDER_STRIPE_MASK_IMAGE, 456, 62),
     (KEYBOARD_SHIFT_ICON, 26, 26),
     (KEYBOARD_DELETE_ICON, 30, 26),
+    (KEYBOARD_GO_ICON, 26, 26),
 ]
 # Spec sizes: 16 subtitle, 22 value, 24 row, 26 ›, 30 title, 46 ‹
 FONT_POLICIES = {
@@ -171,7 +173,7 @@ DIM = "#595959"
 ACCENT = "#FF4C01"
 SETTINGS_RUNTIME_CHARSET = (
     "".join(chr(codepoint) for codepoint in range(32, 127))
-    + "°×·…‹›"
+    + "°×·…‹›✓"
 )
 
 def _bound_label(objs, parent, x, y, w, h, text, bind, *, size=20,
@@ -231,19 +233,75 @@ def _rotation_dropdown(objs, parent, y):
     })
 
 
-def _screen_timeout_dropdown(objs, parent, y):
+# Screen-off choices.  English is baked into the scene labels and Chinese is
+# applied at run time by the App through the generated label set_text API: a
+# dropdown would freeze its option strings at build time and expose no runtime
+# text API, so its options could never follow the language setting.
+SCREEN_TIMEOUT_OPTIONS = (
+    "10 sec", "30 sec", "1 min", "2 min", "5 min", "Never",
+)
+SCREEN_TIMEOUT_DRAWER = "settings_timeout_drawer"
+SCREEN_TIMEOUT_VALUE = "settings_screen_timeout_value"
+
+
+def _screen_timeout_picker(objs, page, y):
+    """Screen-off selector drawn as a Drawer of labels, not a dropdown."""
+    open_events = [{
+        "event": "click", "action": "drawer_open",
+        "target_name": SCREEN_TIMEOUT_DRAWER,
+    }]
+    objs.append(button(page, 12, y, 456, 46, "", bg=BG, radius=20,
+                       name="settings_screen_timeout_row", events=open_events))
+    objs.append(label(page, 12, y, 280, 46, "Screen-off", size=24,
+                      events=open_events))
+    value = label(page, 316, y, 148, 46, SCREEN_TIMEOUT_OPTIONS[1],
+                  size=20, color=FG, align="right",
+                  bind=SCREEN_TIMEOUT_VALUE, name=SCREEN_TIMEOUT_VALUE)
+    value["overflow"] = "ellipsis"
+    value["font_charset"] = SETTINGS_RUNTIME_CHARSET
+    objs.append(value)
+
+    drawer = len(objs)
     objs.append({
-        "type": "dropdown", "parent": parent,
-        "x": 316, "y": y, "w": 128, "h": 46,
-        "name": "settings_screen_timeout_dropdown",
-        "callback": "settings_screen_timeout_select",
-        "options": ["10 sec", "30 sec", "1 min", "2 min", "5 min", "Never"],
-        "selected": 1, "item_height": 36, "open_direction": "up",
-        "font_size": 20, "fg_color": FG,
-        "bg_color": "#29292B", "panel_color": "#29292B",
-        "border_color": "#464649", "border_width": 1,
-        "radius": 14,
+        "type": "drawer", "parent": page,
+        "x": 0, "y": 0, "w": CONTENT_W, "h": CONTENT_H,
+        "name": SCREEN_TIMEOUT_DRAWER, "edge": "bottom", "open": False,
     })
+    close_events = [{
+        "event": "click", "action": "drawer_close",
+        "target_name": SCREEN_TIMEOUT_DRAWER, "animated": True,
+    }]
+    # Scrim: tapping outside the panel closes the picker.
+    objs.append(button(drawer, 0, 0, CONTENT_W, CONTENT_H, "", bg="#000000",
+                       radius=0, opacity=150, name="settings_timeout_scrim",
+                       events=close_events))
+    panel = len(objs)
+    objs.append(container(drawer, 0, 264, CONTENT_W, 216, bg="#101011",
+                          name="settings_timeout_panel"))
+    objs.append(label(panel, 24, 16, 280, 30, "Screen-off", size=24,
+                      color="#D6D6DE"))
+    objs.append(button(panel, 378, 14, 86, 34, "Close", radius=17, size=16,
+                       events=close_events))
+    for index, text in enumerate(SCREEN_TIMEOUT_OPTIONS):
+        row_y = 56 + index * 26
+        row_events = [
+            {"event": "click", "action": "call",
+             "target_name": "settings_screen_timeout_select", "arg": index},
+            {"event": "click", "action": "drawer_close",
+             "target_name": SCREEN_TIMEOUT_DRAWER, "animated": True},
+        ]
+        objs.append(button(panel, 16, row_y, 448, 24, "", bg="#101011",
+                           radius=8, name=f"settings_timeout_row_{index}",
+                           events=row_events))
+        # Bound labels (not plain ones): the App re-texts them from C with the
+        # generated set_text API, which a dropdown could never offer.
+        option = label(panel, 36, row_y, 240, 24, text, size=20, color=FG,
+                       bind=f"settings_screen_timeout_option_{index}",
+                       name=f"settings_screen_timeout_option_{index}",
+                       events=row_events)
+        option["overflow"] = "ellipsis"
+        option["font_charset"] = SETTINGS_RUNTIME_CHARSET
+        objs.append(option)
 
 
 def _build_root(objs, page):
@@ -284,13 +342,13 @@ def _build_root(objs, page):
         "dynamic_image": True, "name": "settings_root_row_icon",
     })
     title = label(row, 68, 27, 190, 46, "AI Model", size=30,
-                  name="settings_root_row_title")
+                  name="settings_root_row_title", i18n=False)
     title["overflow"] = "ellipsis"
     title["font_charset"] = SETTINGS_RUNTIME_CHARSET
     objs.append(title)
     value = label(row, 260, 33, 152, 34, "Trial", size=20,
                   color=MUTED, align="right",
-                  name="settings_root_row_value")
+                  name="settings_root_row_value", i18n=False)
     value["overflow"] = "ellipsis"
     value["font_charset"] = SETTINGS_RUNTIME_CHARSET
     objs.append(value)
@@ -357,7 +415,7 @@ def _build_display(objs, page):
     objs.append(label(page, 12, 246, 280, 46, "Rotation", size=24))
     objs.append(label(page, 12, 320, 280, 46, "Screen-off", size=24))
     _rotation_dropdown(objs, page, 246)
-    _screen_timeout_dropdown(objs, page, 316)
+    _screen_timeout_picker(objs, page, 316)
 
 
 def _build_sound(objs, page):
@@ -657,16 +715,19 @@ def _build_wlan_password(objs, page):
         "ok_color": ACCENT,
         "ok_text_color": FG,
         "key_radius": 8,
-        "shift_label": "SHIFT",
-        "delete_label": "DELETE",
-        "ok_label": "GO",
+        # Function keys are drawn as icons instead of text: a baked label can
+        # never follow the runtime language setting, and the keyboard widget
+        # exposes no set_text for its keys.  The icons are language neutral.
         "symbols_label": "ABC",
         "letters_label": "ABC",
         "space_label": "",
         "function_font_size": 20,
         "shift_icon": KEYBOARD_SHIFT_ICON,
         "delete_icon": KEYBOARD_DELETE_ICON,
+        "ok_icon": KEYBOARD_GO_ICON,
     })
+
+
 def _build_wlan_phone_setup(objs, page):
     close_events = [{
         "event": "click",
@@ -772,7 +833,7 @@ def _web_nav(objs, page, title, name):
                       color=MUTED, align="center", name=f"{name}_title")
     if name == "nav_settings_detail":
         title_obj["bind"] = "settings_detail_title"
-        title_obj["font_charset"] = "AboutDiagnosticSafe ModeBattery"
+        title_obj["font_charset"] = "AboutDiagnosticSafe ModeBatteryLanguageLocation"
     objs.append(title_obj)
 
 
@@ -1024,13 +1085,13 @@ def _build_detail(objs, page):
     # About uses compact left-side labels (Software / Update), leaving the
     # wider right column free for versions and check-result status text.
     title = label(row, 12, 27, 180, 46, "Model", size=32,
-                  name="settings_detail_row_title")
+                  name="settings_detail_row_title", i18n=False)
     title["dynamic_color"] = True
     title["font_charset"] = SETTINGS_RUNTIME_CHARSET
     objs.append(title)
     value = label(row, 208, 33, 228, 34, "ESP-MOSAICO", size=24,
                   color=MUTED, align="right",
-                  name="settings_detail_row_value")
+                  name="settings_detail_row_value", i18n=False)
     value["dynamic_color"] = True
     value["font_charset"] = SETTINGS_RUNTIME_CHARSET
     objs.append(value)
@@ -1164,7 +1225,7 @@ def _build_update(objs, page):
     })
     note_text = label(note_row, 4, 1, 440, 26,
                       "Release information only", size=18,
-                      name="settings_update_note_row_text")
+                      name="settings_update_note_row_text", i18n=False)
     note_text["dynamic_color"] = True
     note_text["font_charset"] = SETTINGS_RUNTIME_CHARSET
     objs.append(note_text)
@@ -1237,6 +1298,11 @@ def build_settings_ui(objs, content):
 
     page = _page(objs, stack, PAGE_SET)
     _build_root(objs, page)
+    # The root page is the only page that shows the shared chrome title; the
+    # sub-pages draw their own nav header. Authoring it here (instead of letting
+    # the native overlay blit a pre-baked A8 bitmap) is what makes the top bar
+    # follow the language setting.
+    app_root_shell(objs, page, "SETTINGS")
 
     page = _page(objs, stack, PAGE_DISPLAY)
     _build_display(objs, page)

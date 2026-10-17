@@ -20,8 +20,10 @@
 #include "wifi_manager.h"
 #if CONFIG_APP_CLAW_MOSAIC_GSP_ENABLE
 #include "cap_im_ai_create.h"
+#include "cap_interact.h"
 #include "claw_event_router.h"
 #include "claw_hw_registry.h"
+#include "interact_backend.h"
 #include "mosaic_setup.h"
 #include "mosaic_ui.h"
 #include "mosaic_button_platform.h"
@@ -54,6 +56,7 @@
 #include "cap_im_wechat.h"
 #endif
 #include "app_config.h"
+#include "mosaic_i18n.h"
 #include "trial_auth.h"
 #include "cap_system_platform.h"
 #include "mosaic_settings_platform.h"
@@ -108,6 +111,58 @@ static esp_err_t main_register_ai_create_capability(
                         "Failed to register Mosaico AI Create capability");
     return claw_event_router_register_outbound_binding(
         CAP_IM_AI_CREATE_CHANNEL, "ai_create_send_message");
+}
+
+static esp_err_t main_register_interact_capability(
+    const app_claw_config_t *config,
+    const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    ESP_RETURN_ON_ERROR(cap_interact_register_group(), TAG,
+                        "Failed to register Mosaico interaction capability");
+    return ESP_OK;
+}
+
+/* KEY_L / KEY_R on the interaction subboard drive project navigation: Back and
+ * Home on the left, next App and Settings on the right. The Interaction App
+ * keeps the keys for its own dashboard, so it is left untouched. */
+static void main_interact_key_event(int key_id, bool is_long, void *ctx)
+{
+    (void)ctx;
+    if (mosaic_ui_active_app_is("interact")) return;
+
+    if (key_id == 0) {
+        esp_err_t err = is_long ? mosaic_ui_open_app("mosaic-hub") : mosaic_ui_back();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "interact KEY_L %s: %s",
+                     is_long ? "home" : "back", esp_err_to_name(err));
+        }
+        return;
+    }
+    if (key_id != 1) return;
+
+    if (is_long) {
+        esp_err_t err = mosaic_ui_open_app("settings");
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "interact KEY_R settings: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+
+    static const char *const cycle[] = {"music", "camera", "album", "weather"};
+    const size_t cycle_count = sizeof(cycle) / sizeof(cycle[0]);
+    size_t next = 0;
+    for (size_t i = 0; i < cycle_count; ++i) {
+        if (mosaic_ui_active_app_is(cycle[i])) {
+            next = (i + 1) % cycle_count;
+            break;
+        }
+    }
+    esp_err_t err = mosaic_ui_open_app(cycle[next]);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "interact KEY_R %s: %s", cycle[next], esp_err_to_name(err));
+    }
 }
 
 static bool main_asr_config_changed(
@@ -855,6 +910,7 @@ void app_main(void)
         ESP_ERROR_CHECK(app_config_reset_all());
     }
     ESP_ERROR_CHECK(app_config_load(s_config));
+    mosaic_i18n_set_language(mosaic_i18n_parse(s_config->language));
     app_config_to_claw(s_config, s_claw_config);
     init_timezone(app_config_get_timezone(s_config)); // no need to check error
 #if CONFIG_ESP_BOARD_ESP_MOSAICO
@@ -899,6 +955,9 @@ void app_main(void)
         .refresh_interval_ms = 60U * 60U * 1000U,
         .stale_after_ms = 6U * 60U * 60U * 1000U,
     }));
+    /* Honour a manual weather city before the worker performs its first
+     * refresh; -1/empty keeps IP-based detection. */
+    mosaic_settings_platform_apply_weather_city();
     ESP_ERROR_CHECK(update_check_service_init(
         &(update_check_service_config_t) {
             .manifest_url = CONFIG_APP_UPDATE_MANIFEST_URL,
@@ -1088,6 +1147,13 @@ void app_main(void)
             .llm_visible_by_default = false,
             .reg = main_register_ai_create_capability,
         }));
+    ESP_ERROR_CHECK(app_capabilities_register_external_group(
+        &(app_capability_external_group_t) {
+            .group_id = "cap_interact",
+            .display_name = "Mosaico Interaction",
+            .llm_visible_by_default = true,
+            .reg = main_register_interact_capability,
+        }));
 #endif
     ESP_ERROR_CHECK(app_cap_system_platform_init(s_app_settings));
     ESP_ERROR_CHECK(app_claw_set_save_config_callback(main_save_claw_config, NULL));
@@ -1101,6 +1167,15 @@ void app_main(void)
     esp_err_t button_err = mosaic_button_platform_init();
     if (button_err != ESP_OK) {
         ESP_LOGW(TAG, "Mosaic buttons unavailable: %s", esp_err_to_name(button_err));
+    }
+    /* Start the always-on interaction subboard service so LED/PIR control is
+     * available regardless of which App is active. */
+    interact_backend_start();
+    esp_err_t interact_key_err =
+        interact_backend_set_key_cb(main_interact_key_event, NULL);
+    if (interact_key_err != ESP_OK) {
+        ESP_LOGW(TAG, "interaction key routing unavailable: %s",
+                 esp_err_to_name(interact_key_err));
     }
 #endif
     esp_err_t recovery_err = app_fs_wait_recovery();

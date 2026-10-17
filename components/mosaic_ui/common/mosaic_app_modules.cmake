@@ -22,6 +22,7 @@ function(mosaic_collect_app_modules root binary_dir)
     set(registry_externs "")
     set(registry_entries "")
     set(package_entries "")
+    set(i18n_includes "")
 
     foreach(manifest IN LISTS app_manifests)
         unset(MOSAIC_APP_NAME)
@@ -36,6 +37,7 @@ function(mosaic_collect_app_modules root binary_dir)
         unset(MOSAIC_APP_TICK_MS)
         unset(MOSAIC_APP_EXTRA_SOURCES)
         unset(MOSAIC_APP_EXTRA_INCLUDE_DIRS)
+        unset(MOSAIC_APP_I18N)
         include("${manifest}")
         foreach(required IN ITEMS NAME MODULE_SOURCE MODULE_SYMBOL BUNDLE)
             if(NOT DEFINED MOSAIC_APP_${required})
@@ -43,8 +45,17 @@ function(mosaic_collect_app_modules root binary_dir)
                     "${manifest}: MOSAIC_APP_${required} is required")
             endif()
         endforeach()
+        # Apps authored outside scene_common have no generated i18n table.
+        if(NOT DEFINED MOSAIC_APP_I18N)
+            set(MOSAIC_APP_I18N ON)
+        endif()
         get_filename_component(module_dir "${manifest}" DIRECTORY)
         get_filename_component(module_slug "${module_dir}" NAME)
+        if(MOSAIC_APP_NAME STREQUAL "mosaic-hub")
+            set(gsp_stem "mosaic_hub")
+        else()
+            set(gsp_stem "${module_slug}")
+        endif()
         set(gen_include "${binary_dir}/mosaic_gen/${module_slug}")
         file(MAKE_DIRECTORY "${gen_include}")
         if(NOT EXISTS "${module_dir}/${MOSAIC_APP_MODULE_SOURCE}")
@@ -90,6 +101,15 @@ function(mosaic_collect_app_modules root binary_dir)
             endif()
             list(APPEND include_dirs "${module_dir}/${extra_include}")
         endforeach()
+        if(MOSAIC_APP_I18N)
+            string(APPEND i18n_includes
+                "#include \"${gsp_stem}_i18n.h\"\n")
+            set(i18n_symbol "${gsp_stem}_i18n")
+            set(i18n_count_symbol "${gsp_stem}_i18n_count")
+        else()
+            set(i18n_symbol "NULL")
+            set(i18n_count_symbol "0u")
+        endif()
         string(APPEND registry_externs
             "extern const mosaic_app_descriptor_t "
             "${MOSAIC_APP_MODULE_SYMBOL};\n")
@@ -113,7 +133,9 @@ function(mosaic_collect_app_modules root binary_dir)
             ".bundle_path = \"${module_rel}/${MOSAIC_APP_BUNDLE}\", "
             ".logic = &mosaic_${logic_name}_logic_ops, "
             ".logic_entry = ${lua_entry}, "
-            ".tick_ms = ${MOSAIC_APP_TICK_MS} },\n")
+            ".tick_ms = ${MOSAIC_APP_TICK_MS}, "
+            ".i18n = ${i18n_symbol}, "
+            ".i18n_count = ${i18n_count_symbol} },\n")
     endforeach()
 
     set(registry_dir "${binary_dir}/generated")
@@ -123,7 +145,8 @@ function(mosaic_collect_app_modules root binary_dir)
         "/* Generated from per-App app.cmake manifests. */\n"
         "#include <stddef.h>\n"
         "#include \"mosaic_app_catalog.h\"\n"
-        "#include \"mosaic_logic.h\"\n\n"
+        "#include \"mosaic_logic.h\"\n"
+        "${i18n_includes}\n"
         "${registry_externs}\n"
         "const mosaic_app_descriptor_t *const mosaic_app_registry[] = {\n"
         "${registry_entries}"

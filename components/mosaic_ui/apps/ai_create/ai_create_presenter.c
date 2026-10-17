@@ -9,8 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
+
 #include "ai_create_binds.h"
 #include "ai_create_objects.h"
+#include "mosaic_i18n.h"
 
 struct ai_create_presenter_t {
     uint32_t rendered_revision;
@@ -212,6 +216,31 @@ static const mode_copy_t s_modes[] = {
         "Schedule", "Hold to talk: give a time and task…"},
 };
 
+/* Chinese copy for the same modes; selected at render time because a file-scope
+ * static initializer cannot call mosaic_i18n_tr(). */
+static const mode_copy_t s_modes_zh[] = {
+    [CAP_IM_AI_CREATE_MODE_CREATE] = {
+        "AI 创作", "按住说话：描述你的设备…"},
+    [CAP_IM_AI_CREATE_MODE_SKILL] = {
+        "安装技能", "按住说话：描述要安装的技能…"},
+    [CAP_IM_AI_CREATE_MODE_MEMORY] = {
+        "记忆", "按住说话：说出要记住的内容…"},
+    [CAP_IM_AI_CREATE_MODE_PLAN] = {
+        "计划", "按住说话：描述你的目标…"},
+    [CAP_IM_AI_CREATE_MODE_QUICK] = {
+        "快速提问", "按住说话：说出你的问题…"},
+    [CAP_IM_AI_CREATE_MODE_SCHEDULE] = {
+        "日程", "按住说话：给出时间与任务…"},
+};
+
+static const mode_copy_t *mode_copy_for(cap_im_ai_create_mode_t mode)
+{
+    const mode_copy_t *table =
+        mosaic_i18n_is_chinese() ? s_modes_zh : s_modes;
+    return mode < CAP_IM_AI_CREATE_MODE_COUNT
+               ? &table[mode] : &table[CAP_IM_AI_CREATE_MODE_QUICK];
+}
+
 static uint16_t feature_page_for_mode(cap_im_ai_create_mode_t mode)
 {
     switch (mode) {
@@ -232,22 +261,22 @@ static const char *voice_unavailable_copy(ai_create_voice_readiness_t readiness)
 {
     switch (readiness) {
     case AI_CREATE_VOICE_READINESS_DISABLED:
-        return "Set up speech recognition first";
+        return TR("Set up speech recognition first", "请先设置语音识别");
     case AI_CREATE_VOICE_READINESS_INITIALIZING:
-        return "Starting voice service…";
+        return TR("Starting voice service…", "正在启动语音服务…");
     case AI_CREATE_VOICE_READINESS_OFFLINE:
-        return "Network offline; hold to retry";
+        return TR("Network offline; hold to retry", "网络离线；按住重试");
     case AI_CREATE_VOICE_READINESS_AUTH_FAILED:
-        return "Invalid ASR credentials";
+        return TR("Invalid ASR credentials", "语音识别凭据无效");
     case AI_CREATE_VOICE_READINESS_AUDIO_ERROR:
-        return "Microphone unavailable";
+        return TR("Microphone unavailable", "麦克风不可用");
     case AI_CREATE_VOICE_READINESS_BUSY:
-        return "Voice service busy; try later";
+        return TR("Voice service busy; try later", "语音服务忙，请稍后再试");
     case AI_CREATE_VOICE_READINESS_PROVIDER_ERROR:
-        return "Voice service error; hold to retry";
+        return TR("Voice service error; hold to retry", "语音服务出错；按住重试");
     case AI_CREATE_VOICE_READINESS_READY:
     default:
-        return "Hold to talk, release to send…";
+        return TR("Hold to talk, release to send…", "按住说话，松开发送…");
     }
 }
 
@@ -255,22 +284,30 @@ static const char *voice_notice_copy(ai_create_voice_readiness_t readiness)
 {
     switch (readiness) {
     case AI_CREATE_VOICE_READINESS_DISABLED:
-        return "Speech recognition is not configured. Complete ASR setup first.";
+        return TR("Speech recognition is not configured. Complete ASR setup first.",
+                  "尚未配置语音识别，请先完成 ASR 设置。");
     case AI_CREATE_VOICE_READINESS_INITIALIZING:
-        return "The voice service is starting. Try again shortly.";
+        return TR("The voice service is starting. Try again shortly.",
+                  "语音服务正在启动，请稍后再试。");
     case AI_CREATE_VOICE_READINESS_OFFLINE:
-        return "Cannot connect to the voice service. Check the network and retry.";
+        return TR("Cannot connect to the voice service. Check the network and retry.",
+                  "无法连接语音服务，请检查网络后重试。");
     case AI_CREATE_VOICE_READINESS_AUTH_FAILED:
-        return "Invalid ASR credentials. Check the speech recognition settings.";
+        return TR("Invalid ASR credentials. Check the speech recognition settings.",
+                  "语音识别凭据无效，请检查语音识别设置。");
     case AI_CREATE_VOICE_READINESS_AUDIO_ERROR:
-        return "The microphone is unavailable. Check the audio device.";
+        return TR("The microphone is unavailable. Check the audio device.",
+                  "麦克风不可用，请检查音频设备。");
     case AI_CREATE_VOICE_READINESS_BUSY:
-        return "The voice service is busy. Try again shortly.";
+        return TR("The voice service is busy. Try again shortly.",
+                  "语音服务忙，请稍后再试。");
     case AI_CREATE_VOICE_READINESS_PROVIDER_ERROR:
-        return "The voice service is temporarily unavailable. Try again later.";
+        return TR("The voice service is temporarily unavailable. Try again later.",
+                  "语音服务暂时不可用，请稍后再试。");
     case AI_CREATE_VOICE_READINESS_READY:
     default:
-        return "The voice operation could not be completed. Please retry.";
+        return TR("The voice operation could not be completed. Please retry.",
+                  "语音操作未能完成，请重试。");
     }
 }
 
@@ -286,15 +323,17 @@ static const char *voice_hint(const ai_create_controller_snapshot_t *model)
 {
     switch (model->voice_state) {
     case AI_CREATE_VOICE_STATE_PREPARING:
-        return "Starting recording and voice service…";
+        return TR("Starting recording and voice service…",
+                  "正在启动录音与语音服务…");
     case AI_CREATE_VOICE_STATE_FINALIZING:
-        return "Recognizing and sending…";
+        return TR("Recognizing and sending…", "正在识别并发送…");
     case AI_CREATE_VOICE_STATE_CANCELLING:
-        return "Cancelling…";
+        return TR("Cancelling…", "正在取消…");
     case AI_CREATE_VOICE_STATE_ERROR:
-        return model->error[0] ? model->error : "Speech recognition failed";
+        return model->error[0] ? model->error :
+                                 TR("Speech recognition failed", "语音识别失败");
     default:
-        return "Release: send · Swipe up: cancel";
+        return TR("Release: send · Swipe up: cancel", "松开发送 · 上滑取消");
     }
 }
 
@@ -421,9 +460,18 @@ static esp_err_t render_sessions(esp_gsp_handle_t ui,
     const size_t page_count = (session_count + AI_CREATE_SESSION_PAGE_SIZE - 1U) /
                               AI_CREATE_SESSION_PAGE_SIZE;
     if (page_count > 1U) {
-        snprintf(count, sizeof(count), "%u sessions · Swipe left/right · %u/%u",
-                 (unsigned)session_count, (unsigned)(session_page + 1U),
-                 (unsigned)page_count);
+        if (mosaic_i18n_is_chinese()) {
+            snprintf(count, sizeof(count), "%u 会话 · 左右滑动 · %u/%u",
+                     (unsigned)session_count, (unsigned)(session_page + 1U),
+                     (unsigned)page_count);
+        } else {
+            snprintf(count, sizeof(count),
+                     "%u sessions · Swipe left/right · %u/%u",
+                     (unsigned)session_count, (unsigned)(session_page + 1U),
+                     (unsigned)page_count);
+        }
+    } else if (mosaic_i18n_is_chinese()) {
+        snprintf(count, sizeof(count), "%u 会话", (unsigned)session_count);
     } else {
         snprintf(count, sizeof(count), "%u sessions", (unsigned)session_count);
     }
@@ -473,8 +521,13 @@ static esp_err_t render_sessions(esp_gsp_handle_t ui,
         if (present &&
             strcmp(sessions->sessions[session_index],
                    sessions->current_alias) == 0) {
-            snprintf(title, sizeof(title), "%s · Current",
-                     sessions->sessions[session_index]);
+            if (mosaic_i18n_is_chinese()) {
+                snprintf(title, sizeof(title), "%s · 当前",
+                         sessions->sessions[session_index]);
+            } else {
+                snprintf(title, sizeof(title), "%s · Current",
+                         sessions->sessions[session_index]);
+            }
         } else if (present) {
             strlcpy(title, sessions->sessions[session_index], sizeof(title));
         }
@@ -520,7 +573,7 @@ static bool message_at(const ai_create_presenter_handle_t presenter,
     if (!text[0] && message->pending) {
         text = "…";
     } else if (!text[0] && message->error) {
-        text = "Request failed";
+        text = TR("Request failed", "请求失败");
     }
     uint64_t id = ((uint64_t)message->request_id << 1U) |
                   (uint64_t)message->role;
@@ -803,9 +856,7 @@ esp_err_t ai_create_presenter_render(
                 ui, selected_binds[selected_mode][1], true);
         }
 
-        const mode_copy_t *copy = model->mode < CAP_IM_AI_CREATE_MODE_COUNT
-                                      ? &s_modes[model->mode]
-                                      : &s_modes[CAP_IM_AI_CREATE_MODE_QUICK];
+        const mode_copy_t *copy = mode_copy_for(model->mode);
         (void)esp_gsp_set_text(ui, GSP_BIND_AI_MODE_TITLE, copy->title);
     }
     if (voice_availability_changed) {
@@ -817,9 +868,7 @@ esp_err_t ai_create_presenter_render(
             ui, GSP_BIND_AI_CHAT_DEFAULT_PROMPT, prompt);
     }
     if (mode_changed || voice_availability_changed) {
-        const mode_copy_t *copy = model->mode < CAP_IM_AI_CREATE_MODE_COUNT
-                                      ? &s_modes[model->mode]
-                                      : &s_modes[CAP_IM_AI_CREATE_MODE_QUICK];
+        const mode_copy_t *copy = mode_copy_for(model->mode);
         (void)esp_gsp_set_text(
             ui, GSP_BIND_AI_MODE_PROMPT,
             model->voice_status.readiness == AI_CREATE_VOICE_READINESS_READY
@@ -828,7 +877,7 @@ esp_err_t ai_create_presenter_render(
     }
     if (model_changed && voice) {
         (void)esp_gsp_set_text(ui, GSP_BIND_AI_VOICE_TEXT,
-                               model->input[0] ? model->input : "Listening…");
+                               model->input[0] ? model->input : TR("Listening…", "聆听中…"));
         (void)esp_gsp_set_text(ui, GSP_BIND_AI_VOICE_HINT, voice_hint(model));
     }
     const char *notice = model->notice_visible
@@ -852,10 +901,16 @@ esp_err_t ai_create_presenter_render(
         deciseconds = (now_us - voice_started_us) / 100000;
     }
     if (voice && presenter->rendered_deciseconds != deciseconds) {
-        char elapsed[20];
-        snprintf(elapsed, sizeof(elapsed), "%lld.%lld s",
-                 (long long)(deciseconds / 10),
-                 (long long)(deciseconds % 10));
+        char elapsed[24];
+        if (mosaic_i18n_is_chinese()) {
+            snprintf(elapsed, sizeof(elapsed), "%lld.%lld 秒",
+                     (long long)(deciseconds / 10),
+                     (long long)(deciseconds % 10));
+        } else {
+            snprintf(elapsed, sizeof(elapsed), "%lld.%lld s",
+                     (long long)(deciseconds / 10),
+                     (long long)(deciseconds % 10));
+        }
         (void)esp_gsp_set_text(ui, GSP_BIND_AI_VOICE_TIME, elapsed);
         presenter->rendered_deciseconds = deciseconds;
     }

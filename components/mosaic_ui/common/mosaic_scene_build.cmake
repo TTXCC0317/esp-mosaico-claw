@@ -123,6 +123,7 @@ function(mosaic_setup_bundle_generation_for_target
         unset(MOSAIC_APP_GENERATOR)
         unset(MOSAIC_APP_GENERATED_HEADERS)
         unset(MOSAIC_APP_SCENE_SOURCES)
+        unset(MOSAIC_APP_I18N)
         include("${manifest}")
         if(NOT DEFINED MOSAIC_APP_NAME OR NOT DEFINED MOSAIC_APP_BUNDLE
                 OR NOT DEFINED MOSAIC_APP_GENERATOR)
@@ -159,18 +160,36 @@ function(mosaic_setup_bundle_generation_for_target
                     "${out_dir}/${gsp_stem}_templates.h")
             endif()
         endif()
+        # Emitted by scene_common.write_scene alongside the bundle; the App
+        # registry includes it to apply Chinese text overrides at run time.
+        # Apps whose scenes are not authored through scene_common opt out with
+        # MOSAIC_APP_I18N OFF so the registry never includes a missing header.
+        if(NOT DEFINED MOSAIC_APP_I18N)
+            set(MOSAIC_APP_I18N ON)
+        endif()
+        if(MOSAIC_APP_I18N)
+            list(APPEND header_outputs "${out_dir}/${gsp_stem}_i18n.h")
+        endif()
 
         set(scene_source_deps)
         foreach(scene_source IN LISTS MOSAIC_APP_SCENE_SOURCES)
             list(APPEND scene_source_deps "${module_dir}/${scene_source}")
         endforeach()
 
+        if(CMAKE_HOST_WIN32)
+            set(mosaic_path_sep "\\;")
+            string(REPLACE ";" "\\;" mosaic_escaped_path "$ENV{PATH}")
+        else()
+            set(mosaic_path_sep ":")
+            set(mosaic_escaped_path "$ENV{PATH}")
+        endif()
         set(regen_env
-            "PATH=${python_dir}:$ENV{PATH}"
+            "PATH=${python_dir}${mosaic_path_sep}${mosaic_escaped_path}"
             "PYTHONPATH=${gsp_dir}/tools"
             "GSPC=${mosaic_gspc}"
             "GSP_ROOT=${gsp_dir}"
             "ESP_GSP_ROOT=${gsp_dir}"
+            "MOSAIC_APP_STEM=${gsp_stem}"
             "MOSAIC_GENERATED_DIR=${out_dir}")
         if(DEFINED MOSAIC_SCENE_PROFILE AND
                 NOT MOSAIC_SCENE_PROFILE STREQUAL "")
@@ -188,11 +207,16 @@ function(mosaic_setup_bundle_generation_for_target
             OUTPUT "${bundle_out}" ${header_outputs}
             COMMAND ${CMAKE_COMMAND} -E env ${regen_env}
                     bash "${module_dir}/scene/regenerate.sh"
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${root}/common/filter_i18n_header.py"
+                    "${out_dir}" "${gsp_stem}"
             WORKING_DIRECTORY "${module_dir}/scene"
             DEPENDS "${module_dir}/scene/regenerate.sh"
                     "${module_dir}/${MOSAIC_APP_GENERATOR}"
                     ${scene_source_deps}
                     "${root}/common/scene_common.py"
+                    "${root}/common/i18n_strings.py"
+                    "${root}/common/filter_i18n_header.py"
                     "${root}/common/font_paths.py"
                     "${root}/common/fonts/NotoSans-Regular.ttf"
                     "${root}/common/fonts/DejaVuSans.ttf"

@@ -182,8 +182,13 @@ def build_player(objs, parent):
     objs.append(container(parent, 0, 0, CONTENT_W, CONTENT_H, bg="#000000"))
     objs.append(label(parent, 24, 17, 82, 32, "Local", size=24,
                       color="#FCFCFF"))
+    # The tab's hit region lives on a plain container so the label keeps its
+    # i18n bind: gspc drops a bound label's hit region, and finalize_scene_i18n
+    # would then strip the bind (leaving "Bluetooth" untranslated).
+    objs.append(container(parent, 113, 17, 150, 32, bg=BG_TOP,
+                          callback="music_bluetooth"))
     objs.append(label(parent, 113, 17, 150, 32, "Bluetooth", size=24,
-                      color="#91919B", callback="music_bluetooth"))
+                      color="#91919B"))
     objs.append(container(parent, 50, 47, 13, 13, bg="#FF4C01", radius=3))
     disc_static = len(objs)
     objs.append(layer(parent, 110, 48, 260, 260,

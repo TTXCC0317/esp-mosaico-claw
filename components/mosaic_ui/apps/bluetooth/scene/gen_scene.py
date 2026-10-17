@@ -117,8 +117,13 @@ def build_ui(objs, content):
     waiting = len(objs)
     objs.append(layer(root, 0, 0, CONTENT_W, CONTENT_H,
                       name="bt_waiting", bind="bt_waiting_visible"))
+    # The tab's hit region lives on a plain container so the label keeps its
+    # i18n bind: gspc drops a bound label's hit region, and finalize_scene_i18n
+    # would then strip the bind (leaving "Local" untranslated).
+    objs.append(container(waiting, 24, 17, 82, 32, bg="#000000",
+                          callback="bt_local"))
     objs.append(label(waiting, 24, 17, 82, 32, "Local", size=24,
-                      color="#91919B", callback="bt_local"))
+                      color="#91919B"))
     objs.append(label(waiting, 113, 17, 150, 32, "Bluetooth", size=24,
                       color="#FCFCFF"))
     objs.append(container(waiting, 161, 47, 13, 13,
@@ -146,8 +151,11 @@ def build_ui(objs, content):
     player = len(objs)
     objs.append(layer(root, 0, 0, CONTENT_W, CONTENT_H, hidden=True,
                       name="bt_player", bind="bt_player_visible"))
+    # Same tab hit-region pattern as the waiting page, so "Local" stays bound.
+    objs.append(container(player, 24, 17, 82, 32, bg="#000000",
+                          callback="bt_local"))
     objs.append(label(player, 24, 17, 82, 32, "Local", size=24,
-                      color="#91919B", callback="bt_local"))
+                      color="#91919B"))
     objs.append(label(player, 113, 17, 150, 32, "Bluetooth", size=24,
                       color="#FCFCFF"))
     objs.append(container(player, 161, 47, 13, 13,

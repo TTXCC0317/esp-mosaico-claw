@@ -22,6 +22,7 @@ extern "C" {
 #define MOSAIC_SETTINGS_LLM_MODEL_LEN   64U
 #define MOSAIC_SETTINGS_LLM_URL_LEN     160U
 #define MOSAIC_SETTINGS_VERSION_LEN      32U
+#define MOSAIC_SETTINGS_LANGUAGE_LEN      8U
 #define MOSAIC_SETTINGS_SERIAL_LEN       18U
 #define MOSAIC_SETTINGS_UPDATE_TITLE_LEN 96U
 #define MOSAIC_SETTINGS_UPDATE_SUMMARY_LEN 256U
@@ -30,6 +31,23 @@ extern "C" {
 #define MOSAIC_SETTINGS_PHONE_QR_LEN    512U
 #define MOSAIC_SETTINGS_BATTERY_SUBSCRIBER_MAX 4U
 #define MOSAIC_SETTINGS_WIFI_SUBSCRIBER_MAX    4U
+#define MOSAIC_SETTINGS_CITY_LIST_MAX          16U
+
+/** Built-in weather city preset offered by the Location settings page. */
+typedef struct {
+    const char *name;
+    const char *name_zh;
+    double latitude;
+    double longitude;
+} mosaic_settings_city_t;
+
+/** A province/region grouping the cities offered by the Location page. */
+typedef struct {
+    const char *name;
+    const char *name_zh;
+    const mosaic_settings_city_t *cities;
+    size_t city_count;
+} mosaic_settings_province_t;
 
 typedef struct {
     char ssid[MOSAIC_SETTINGS_SSID_LEN];
@@ -149,6 +167,10 @@ typedef struct {
 typedef struct {
     char software_version[MOSAIC_SETTINGS_VERSION_LEN];
     char serial_number[MOSAIC_SETTINGS_SERIAL_LEN];
+    /** Persisted UI language tag: "en" (default) or "zh". */
+    char language[MOSAIC_SETTINGS_LANGUAGE_LEN];
+    /** Selected weather city preset index; -1 selects IP-based detection. */
+    int weather_city_index;
     uint16_t rotation;
     int brightness;
     int volume;
@@ -185,6 +207,10 @@ typedef struct {
     esp_err_t (*set_vibration)(void *user_ctx, bool enabled);
     esp_err_t (*set_web_logs_enabled)(void *user_ctx, bool enabled);
     esp_err_t (*set_screen_timeout)(void *user_ctx, uint32_t timeout_ms);
+    /** Persist the UI language tag ("en"/"zh"); applied after a reboot. */
+    esp_err_t (*set_language)(void *user_ctx, const char *tag);
+    /** Persist the weather city preset index; -1 selects IP-based detection. */
+    esp_err_t (*set_weather_city)(void *user_ctx, int city_index);
     esp_err_t (*factory_reset)(void *user_ctx);
     /** Start a metadata-only asynchronous update manifest check. */
     esp_err_t (*request_update_check)(void *user_ctx);
@@ -220,6 +246,8 @@ esp_err_t mosaic_settings_set_brightness(int brightness, bool persist);
 esp_err_t mosaic_settings_set_volume(int volume, bool persist);
 esp_err_t mosaic_settings_set_vibration(bool enabled);
 esp_err_t mosaic_settings_set_screen_timeout(uint32_t timeout_ms);
+esp_err_t mosaic_settings_set_language(const char *tag);
+esp_err_t mosaic_settings_set_weather_city(int city_index);
 esp_err_t mosaic_settings_factory_reset(void);
 esp_err_t mosaic_settings_request_update_check(void);
 esp_err_t mosaic_settings_set_wifi_enabled(bool enabled);
@@ -227,6 +255,15 @@ esp_err_t mosaic_settings_set_wifi_enabled(bool enabled);
 /** Read the shared Settings model used by Settings and setup flows. */
 esp_err_t mosaic_settings_get_snapshot(
     mosaic_settings_snapshot_t *ret_snapshot);
+
+/** Built-in weather city presets; global flat index 0..count-1. */
+size_t mosaic_settings_city_count(void);
+const mosaic_settings_city_t *mosaic_settings_city(size_t index);
+
+/** Province/region groupings for the Location page. The city presets above
+ * use a flat global index across all provinces in table order. */
+size_t mosaic_settings_province_count(void);
+const mosaic_settings_province_t *mosaic_settings_province(size_t index);
 
 /** Trial obtains credentials on-device; other LLM backends need an API key. */
 bool mosaic_settings_llm_is_configured(

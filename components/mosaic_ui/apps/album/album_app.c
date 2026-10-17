@@ -11,6 +11,7 @@
 #include "album_templates.h"
 #include "mosaic_app_catalog.h"
 #include "mosaic_hub_actions.h"
+#include "mosaic_i18n.h"
 #include "mosaic_runtime.h"
 
 #include <ctype.h>
@@ -24,6 +25,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+/* Runtime English/Chinese selector for strings owned by the C layer. */
+#define TR(en, zh) mosaic_i18n_tr((en), (zh))
 
 #include "esp_attr.h"
 #include "esp_timer.h"
@@ -420,7 +424,11 @@ static void album_refresh_toolbar(esp_gsp_handle_t ui)
     char text[48];
     size_t selected_count = album_selected_count();
     bool has_selection = selected_count > 0;
-    snprintf(text, sizeof(text), "%u selected", (unsigned)selected_count);
+    if (mosaic_i18n_is_chinese()) {
+        snprintf(text, sizeof(text), "已选 %u 项", (unsigned)selected_count);
+    } else {
+        snprintf(text, sizeof(text), "%u selected", (unsigned)selected_count);
+    }
     (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_SELECT_COUNT, text);
     (void)esp_gsp_set_visible(ui, GSP_BIND_ALBUM_SELECT_DELETE_ENABLED_VISIBLE, has_selection);
 }
@@ -462,10 +470,14 @@ static void album_show_delete_confirm(esp_gsp_handle_t ui)
     }
     char text[80];
     s_album.modal = ALBUM_MODAL_CONFIRM_DELETE;
-    (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_MODAL_TITLE, "Confirm Delete");
-    snprintf(text, sizeof(text), "Remove %u item%s?", (unsigned)count, count == 1 ? "" : "s");
+    (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_MODAL_TITLE, TR("Confirm Delete", "确认删除"));
+    if (mosaic_i18n_is_chinese()) {
+        snprintf(text, sizeof(text), "删除 %u 个项目？", (unsigned)count);
+    } else {
+        snprintf(text, sizeof(text), "Remove %u item%s?", (unsigned)count, count == 1 ? "" : "s");
+    }
     (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_NAME, text);
-    (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_SIZE, "This cannot be undone.");
+    (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_SIZE, TR("This cannot be undone.", "此操作无法撤销。"));
     (void)esp_gsp_set_visible(ui, GSP_BIND_ALBUM_MODAL_VISIBLE, true);
     album_refresh_grid(ui);
 }
@@ -479,7 +491,7 @@ static void album_confirm_delete(esp_gsp_handle_t ui)
     const char **paths = calloc(count, sizeof(*paths));
     if (!paths) {
         ESP_LOGE(TAG, "Cannot allocate delete request");
-        (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_SIZE, "Unable to delete. Please retry.");
+        (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_SIZE, TR("Unable to delete. Please retry.", "无法删除，请重试。"));
         return;
     }
     size_t at = 0;
@@ -493,13 +505,13 @@ static void album_confirm_delete(esp_gsp_handle_t ui)
     free(paths);
     if (!accepted) {
         ESP_LOGE(TAG, "Cannot queue delete request");
-        (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_SIZE, "Unable to delete. Please retry.");
+        (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_SIZE, TR("Unable to delete. Please retry.", "无法删除，请重试。"));
         return;
     }
     s_album.delete_busy = true;
     (void)esp_gsp_set_visible(ui, GSP_BIND_ALBUM_DELETE_ACTIONS_VISIBLE, false);
-    (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_MODAL_TITLE, "Deleting...");
-    (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_SIZE, "Please wait.");
+    (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_MODAL_TITLE, TR("Deleting...", "删除中..."));
+    (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_SIZE, TR("Please wait.", "请稍候。"));
 }
 
 static void album_finish_delete(esp_gsp_handle_t ui)
@@ -538,11 +550,15 @@ static void album_finish_delete(esp_gsp_handle_t ui)
     (void)esp_gsp_set_visible(ui, GSP_BIND_ALBUM_MODAL_VISIBLE, failures != 0);
     if (failures) {
         char text[64];
-        snprintf(text, sizeof(text), "%u file(s) could not be removed.", (unsigned)failures);
+        if (mosaic_i18n_is_chinese()) {
+            snprintf(text, sizeof(text), "%u 个文件无法删除。", (unsigned)failures);
+        } else {
+            snprintf(text, sizeof(text), "%u file(s) could not be removed.", (unsigned)failures);
+        }
         ESP_LOGW(TAG, "Delete incomplete: %u failures", (unsigned)failures);
-        (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_MODAL_TITLE, "Delete Incomplete");
+        (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_MODAL_TITLE, TR("Delete Incomplete", "删除未完成"));
         (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_NAME, text);
-        (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_SIZE, "Retry or cancel.");
+        (void)esp_gsp_set_text(ui, GSP_BIND_ALBUM_DETAIL_SIZE, TR("Retry or cancel.", "重试或取消。"));
     }
     album_refresh_cells(ui, true);
 }

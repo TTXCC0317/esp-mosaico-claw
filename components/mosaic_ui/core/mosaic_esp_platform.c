@@ -18,6 +18,7 @@
 #include "esp_timer.h"
 #include "gsp/gsp_font_catalog.h"
 #include "mosaic_app_shell.h"
+#include "mosaic_i18n.h"
 #include "mosaic_logic.h"
 
 #define MOSAIC_UI_ASSETS_PARTITION "ui_apps"
@@ -465,6 +466,8 @@ static esp_err_t platform_open_app(void* ctx,
         free(app);
         return err;
     }
+    // Overlay the active language on top of the baked English scene text.
+    mosaic_i18n_apply(app->ui, package->i18n, package->i18n_count);
     err = esp_gsp_on_event(app->ui, on_gsp_event, app);
     if (err != ESP_OK) {
         goto fail;
@@ -610,6 +613,8 @@ static esp_err_t platform_replace_app(void* ctx,
         return err;
     }
     platform->app_ui = next_app->ui;
+    // Overlay the active language on top of the baked English scene text.
+    mosaic_i18n_apply(next_app->ui, package->i18n, package->i18n_count);
     err = esp_gsp_on_event(next_app->ui, on_gsp_event, next_app);
     const void* program = NULL;
     size_t program_size = 0;

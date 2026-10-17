@@ -5,6 +5,7 @@
 #include "mosaic_settings_platform.h"
 
 #include "app_factory_reset.h"
+#include "app_config.h"
 
 #if CONFIG_APP_CLAW_MOSAIC_GSP_ENABLE
 
@@ -22,18 +23,69 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mosaic_battery_platform.h"
+#include "mosaic_i18n.h"
 #include "mosaic_setup.h"
 #include "mosaic_loader.h"
 #include "mosaic_settings.h"
 #include "mosaic_system.h"
 #include "mosaic_ui.h"
 #include "update_check_service.h"
+#include "weather_service.h"
 #include "esp_wifi.h"
 #include "wifi_manager.h"
 
 static const char *TAG = "mosaic_settings_platform";
 static mosaic_settings_platform_config_t s_config;
 static TaskHandle_t s_rotation_task;
+
+/** Resolve a persisted weather city index; -1 means IP-based detection. */
+static int weather_city_index_from_config(const app_config_t *config)
+{
+    if (config == NULL || config->weather_city[0] == '\0') {
+        return -1;
+    }
+    char *end = NULL;
+    const long value = strtol(config->weather_city, &end, 10);
+    if (end == config->weather_city || value < 0 ||
+        mosaic_settings_city((size_t)value) == NULL) {
+        return -1;
+    }
+    return (int)value;
+}
+
+/** Push a city preset (or auto when index < 0) into the weather service. */
+static void weather_apply_city(int city_index)
+{
+    const mosaic_settings_city_t *city =
+        city_index >= 0 ? mosaic_settings_city((size_t)city_index) : NULL;
+    if (city == NULL) {
+        (void)weather_service_set_manual_location(NULL);
+        return;
+    }
+    weather_service_location_t location = {
+        .enabled = true,
+        .latitude = city->latitude,
+        .longitude = city->longitude,
+    };
+    const char *city_name = (mosaic_i18n_is_chinese() && city->name_zh != NULL)
+                                ? city->name_zh : city->name;
+    strlcpy(location.city, city_name, sizeof(location.city));
+    (void)weather_service_set_manual_location(&location);
+}
+
+void mosaic_settings_platform_apply_weather_city(void)
+{
+    /* app_config_t is ~7 KB; it must not live on the 6 KB app_main stack. */
+    app_config_t *config = calloc(1, sizeof(*config));
+    if (config == NULL) {
+        weather_apply_city(-1);
+        return;
+    }
+    const esp_err_t err = app_config_load(config);
+    weather_apply_city(
+        err == ESP_OK ? weather_city_index_from_config(config) : -1);
+    free(config);
+}
 
 static void delayed_factory_restart(void *arg)
 {
@@ -162,6 +214,21 @@ static esp_err_t get_snapshot(
     memset(ret_snapshot, 0, sizeof(*ret_snapshot));
     strlcpy(ret_snapshot->software_version, edge_agent_get_version(),
             sizeof(ret_snapshot->software_version));
+    {
+        app_config_t *app_cfg = calloc(1, sizeof(*app_cfg));
+        if (app_cfg != NULL && app_config_load(app_cfg) == ESP_OK) {
+            strlcpy(ret_snapshot->language,
+                    app_cfg->language[0] != '\0' ? app_cfg->language : "en",
+                    sizeof(ret_snapshot->language));
+            ret_snapshot->weather_city_index =
+                weather_city_index_from_config(app_cfg);
+        } else {
+            strlcpy(ret_snapshot->language, "en",
+                    sizeof(ret_snapshot->language));
+            ret_snapshot->weather_city_index = -1;
+        }
+        free(app_cfg);
+    }
     uint8_t mac[6] = {0};
     esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
     if (err == ESP_OK) {
@@ -339,6 +406,77 @@ static esp_err_t set_screen_timeout(void *user_ctx, uint32_t timeout_ms)
                             user_ctx, timeout_ms),
                         TAG, "save screen timeout");
     mosaic_ui_set_screen_timeout(timeout_ms);
+    return ESP_OK;
+}
+
+static void delayed_language_restart(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    esp_restart();
+}
+
+static esp_err_t set_language(void *user_ctx, const char *tag)
+{
+    (void)user_ctx;
+    ESP_RETURN_ON_FALSE(tag != NULL && tag[0] != '\0',
+                        ESP_ERR_INVALID_ARG, TAG, "invalid language tag");
+    /* Keep the ~7 KB config off the caller's stack. */
+    app_config_t *config = calloc(1, sizeof(*config));
+    if (config == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t err = app_config_load(config);
+    if (err == ESP_OK) {
+        strlcpy(config->language, tag, sizeof(config->language));
+        err = app_config_save(config);
+    }
+    free(config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "save language: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGW(TAG, "language set to '%s'; rebooting in 1.5 seconds", tag);
+    if (xTaskCreate(delayed_language_restart, "lang_restart", 2048,
+                    NULL, 5, NULL) != pdPASS) {
+        esp_restart();
+    }
+    return ESP_OK;
+}
+
+static esp_err_t set_weather_city(void *user_ctx, int city_index)
+{
+    (void)user_ctx;
+    if (city_index >= 0 && mosaic_settings_city((size_t)city_index) == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    /* Keep the ~7 KB config off the caller's stack. */
+    app_config_t *config = calloc(1, sizeof(*config));
+    if (config == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t err = app_config_load(config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "load app config for weather city: %s",
+                 esp_err_to_name(err));
+        free(config);
+        return err;
+    }
+    if (city_index < 0) {
+        config->weather_city[0] = '\0';
+    } else {
+        char index_text[12];
+        (void)snprintf(index_text, sizeof(index_text), "%d", city_index);
+        strlcpy(config->weather_city, index_text,
+                sizeof(config->weather_city));
+    }
+    err = app_config_save(config);
+    free(config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "save weather city: %s", esp_err_to_name(err));
+        return err;
+    }
+    weather_apply_city(city_index);
     return ESP_OK;
 }
 
@@ -717,6 +855,8 @@ esp_err_t mosaic_settings_platform_init(
         .set_vibration = set_vibration,
         .set_web_logs_enabled = set_web_logs_enabled,
         .set_screen_timeout = set_screen_timeout,
+        .set_language = set_language,
+        .set_weather_city = set_weather_city,
         .factory_reset = factory_reset,
         .request_update_check = request_update_check,
         .set_wifi_enabled = set_wifi_enabled,

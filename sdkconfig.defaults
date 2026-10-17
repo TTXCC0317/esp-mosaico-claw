@@ -151,3 +151,7 @@ CONFIG_TRIAL_DEVICE_HMAC_KEY_ID=1
 CONFIG_APP_UPDATE_MANIFEST_URL="https://dl.espressif.com/AE/Mosaico/esp-mosaico-stable.json"
 
 CONFIG_ESP_WS_CLIENT_REDIRECT_SAME_HOST_ONLY=n
+
+# Enable led_strip device support so espressif/led_strip (incl. led_strip_rmt_encoder.c) is built
+CONFIG_ESP_BOARD_DEV_LED_STRIP_SUPPORT=y
+CONFIG_ESP_BOARD_DEV_LED_STRIP_SUB_RMT_SUPPORT=y

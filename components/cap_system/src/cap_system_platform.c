@@ -24,6 +24,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "mosaic_settings.h"
 #include "settings_store.h"
 #include "wifi_manager.h"
 
@@ -50,6 +51,22 @@ static const char *TAG = "cap_system_platform";
 #define APP_CAP_SYSTEM_SLEEP_DELAY_MS 500
 #define APP_CAP_SYSTEM_MAX_SLEEP_MS (24ULL * 60ULL * 60ULL * 1000ULL)
 #define APP_CAP_SYSTEM_VIBRATION_DEVICE_NAME "vibration_motor"
+
+/* Screens the assistant may open by name. The catalog lives in mosaic_ui,
+ * which pulls esp-gsp and cannot be included from here, so the names are
+ * mirrored as a whitelist and validated before the UI is asked to switch. */
+static const char *const s_app_cap_system_apps[] = {
+    "mosaic-hub", "music", "camera", "album", "weather", "settings",
+    "interact", "bluetooth", "ai_create", "works", "welcome", "env",
+    "setup_center", "tof", "imu", "breakout",
+};
+#define APP_CAP_SYSTEM_APP_COUNT \
+    (sizeof(s_app_cap_system_apps) / sizeof(s_app_cap_system_apps[0]))
+#define APP_CAP_SYSTEM_HOME_APP "mosaic-hub"
+
+/* Mosaic UI navigation entry points; both are queue-only and safe from any task. */
+extern esp_err_t mosaic_ui_open_app(const char *app_name);
+extern esp_err_t mosaic_ui_back(void);
 
 typedef struct {
     bool deep;
@@ -303,6 +320,86 @@ static cJSON *app_cap_system_build_power_info(void)
     return root;
 }
 
+static bool app_cap_system_app_is_known(const char *name)
+{
+    if (name == NULL || name[0] == '\0') {
+        return false;
+    }
+    for (size_t i = 0; i < APP_CAP_SYSTEM_APP_COUNT; i++) {
+        if (strcmp(name, s_app_cap_system_apps[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static cJSON *app_cap_system_build_apps_info(void)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON *apps = cJSON_CreateArray();
+
+    if (!root || !apps) {
+        cJSON_Delete(root);
+        cJSON_Delete(apps);
+        return NULL;
+    }
+    for (size_t i = 0; i < APP_CAP_SYSTEM_APP_COUNT; i++) {
+        cJSON *name = cJSON_CreateString(s_app_cap_system_apps[i]);
+        if (!name) {
+            cJSON_Delete(root);
+            cJSON_Delete(apps);
+            return NULL;
+        }
+        cJSON_AddItemToArray(apps, name);
+    }
+    cJSON_AddBoolToObject(root, "supported", true);
+    cJSON_AddStringToObject(root, "home_app", APP_CAP_SYSTEM_HOME_APP);
+    cJSON_AddNumberToObject(root, "count", (double)APP_CAP_SYSTEM_APP_COUNT);
+    cJSON_AddItemToObject(root, "apps", apps);
+    return root;
+}
+
+static cJSON *app_cap_system_build_battery_info(void)
+{
+    cJSON *root = cJSON_CreateObject();
+    mosaic_settings_battery_t battery;
+    esp_err_t err;
+
+    if (!root) {
+        return NULL;
+    }
+    memset(&battery, 0, sizeof(battery));
+    err = mosaic_settings_get_battery(&battery);
+    cJSON_AddBoolToObject(root, "supported", err == ESP_OK);
+    if (err == ESP_OK && battery.available) {
+        cJSON_AddBoolToObject(root, "available", true);
+        cJSON_AddBoolToObject(root, "charging", battery.charging);
+        cJSON_AddNumberToObject(root, "percent", battery.state_of_charge);
+        cJSON_AddNumberToObject(root, "voltage_mv", battery.voltage_mv);
+        cJSON_AddNumberToObject(root, "current_ma", battery.current_ma);
+        if (battery.time_to_empty_min != UINT16_MAX) {
+            cJSON_AddNumberToObject(root, "time_to_empty_min",
+                                   battery.time_to_empty_min);
+        }
+        if (battery.time_to_full_min != UINT16_MAX) {
+            cJSON_AddNumberToObject(root, "time_to_full_min",
+                                   battery.time_to_full_min);
+        }
+        if (battery.cycle_count != UINT16_MAX) {
+            cJSON_AddNumberToObject(root, "cycle_count", battery.cycle_count);
+        }
+        cJSON_AddNumberToObject(root, "state_of_health",
+                               battery.state_of_health);
+        cJSON_AddNumberToObject(root, "sequence", battery.sequence);
+    } else {
+        cJSON_AddBoolToObject(root, "available", false);
+        cJSON_AddStringToObject(root, "message",
+                               err == ESP_OK ? "no battery detected"
+                                             : esp_err_to_name(err));
+    }
+    return root;
+}
+
 static esp_err_t app_cap_system_get_info(const char *section,
                                          char *output,
                                          size_t output_size,
@@ -386,10 +483,9 @@ static esp_err_t app_cap_system_get_info(const char *section,
 #endif
         err = ESP_OK;
     } else if (strcmp(section, "battery") == 0) {
-        root = cJSON_CreateObject();
-        cJSON_AddBoolToObject(root, "supported", false);
-        cJSON_AddStringToObject(root, "message",
-                               "board has no normalized battery provider");
+        root = app_cap_system_build_battery_info();
+    } else if (strcmp(section, "apps") == 0) {
+        root = app_cap_system_build_apps_info();
     } else {
         return app_cap_system_render_error(output, output_size,
                                            ESP_ERR_NOT_SUPPORTED, "unknown platform section");
@@ -496,6 +592,40 @@ static esp_err_t app_cap_system_set_audio(
     return app_cap_system_render_error(output, output_size,
                                        ESP_ERR_NOT_SUPPORTED, "audio output is not supported");
 #endif
+}
+
+static esp_err_t app_cap_system_open_app(const cJSON *input,
+                                         char *output,
+                                         size_t output_size)
+{
+    const cJSON *app = cJSON_GetObjectItem(input, "app");
+    esp_err_t err;
+
+    ESP_RETURN_ON_FALSE(cJSON_IsString(app) && app->valuestring &&
+                        app->valuestring[0] != '\0',
+                        ESP_ERR_INVALID_ARG, TAG, "app name is required");
+    ESP_RETURN_ON_FALSE(app_cap_system_app_is_known(app->valuestring),
+                        ESP_ERR_INVALID_ARG, TAG, "unknown app name");
+    err = mosaic_ui_open_app(app->valuestring);
+    if (err != ESP_OK) {
+        return app_cap_system_render_error(output, output_size, err,
+                                           "failed to open app");
+    }
+    snprintf(output, output_size, "{\"ok\":true,\"app\":\"%s\"}",
+             app->valuestring);
+    return ESP_OK;
+}
+
+static esp_err_t app_cap_system_go_back(char *output, size_t output_size)
+{
+    esp_err_t err = mosaic_ui_back();
+
+    if (err != ESP_OK) {
+        return app_cap_system_render_error(output, output_size, err,
+                                           "failed to go back");
+    }
+    snprintf(output, output_size, "{\"ok\":true}");
+    return ESP_OK;
 }
 
 static esp_err_t app_cap_system_wifi_scan(const cJSON *input,
@@ -758,6 +888,10 @@ static esp_err_t app_cap_system_execute(const char *operation,
         err = app_cap_system_set_power(input, output, output_size);
     } else if (strcmp(operation, "enter_sleep") == 0) {
         err = app_cap_system_enter_sleep(input, output, output_size);
+    } else if (strcmp(operation, "open_app") == 0) {
+        err = app_cap_system_open_app(input, output, output_size);
+    } else if (strcmp(operation, "go_back") == 0) {
+        err = app_cap_system_go_back(output, output_size);
     } else {
         err = app_cap_system_render_error(output, output_size,
                                           ESP_ERR_NOT_SUPPORTED, "unknown platform operation");

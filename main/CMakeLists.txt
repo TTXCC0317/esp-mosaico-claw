@@ -5,6 +5,7 @@ idf_component_register(
         app_settings_service
         app_system_config
         audio_hub
+        cap_interact
         claw_hw_registry
         claw_event_router
         cmd_wifi
@@ -18,6 +19,7 @@ idf_component_register(
         gen_bmgr_codes
         mosaico_camera_service
         mosaico_bsp_bmgr_bridge
+        mosaic_ui
         mosaico_boot_splash
         nvs_flash
         weather_service

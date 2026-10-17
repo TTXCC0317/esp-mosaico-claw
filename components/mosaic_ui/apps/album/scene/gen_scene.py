@@ -116,9 +116,19 @@ def toolbar_select(objs, root):
     objs.append(layer(root, 0, 0, CONTENT_W, 64, hidden=True, name="album_toolbar_select", bind="album_toolbar_select_visible"))
     objs.append(button(bar, 16, 12, 72, 40, "Cancel", bg="#181819", fg="#D6D6DE", radius=20, size=14, callback="album_cancel_select"))
     objs.append(label(bar, 152, 17, 176, 30, "0 selected", size=18, color="#FCFCFF", align="center", name="album_select_count", bind="album_select_count"))
-    objs.append(visible_button(bar, 392, 12, 72, 40, "Delete", name="album_select_delete_enabled",
-                               bind="album_select_delete_enabled_visible", bg="#FF4C01", fg="#FCFCFF",
-                               radius=20, size=14, callback="album_delete", hidden=True))
+    # The Delete pill carries the visibility bind, so its hit region and the
+    # translatable label must live on separate objects: a scene object only has
+    # one bind, and an i18n-promoted button text is skipped once the button
+    # already owns a visibility bind.  The container below keeps the callback
+    # and hit region while the child label keeps the i18n bind.
+    delete_pill = len(objs)
+    objs.append(container(bar, 392, 12, 72, 40, bg="#FF4C01", radius=20,
+                          name="album_select_delete_enabled",
+                          bind="album_select_delete_enabled_visible",
+                          callback="album_delete", hidden=True))
+    objs[-1]["bind_target"] = "visible"
+    objs.append(label(delete_pill, 0, 0, 72, 40, "Delete", size=14,
+                      color="#FCFCFF", align="center"))
 
 
 def grid(objs, root):

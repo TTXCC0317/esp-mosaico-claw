@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "esp_gsp.h"
+#include "mosaic_i18n.h"
 
 #define MOSAIC_APP_ROOT_ID 0U
 #define MOSAIC_APP_NO_LAUNCH_ACTION UINT16_MAX
@@ -73,6 +74,9 @@ typedef struct {
     const struct mosaic_logic_ops *logic;
     const char *logic_entry;
     uint32_t tick_ms;
+    /** Generated bind -> Chinese overrides for this App's scene (may be empty). */
+    const mosaic_i18n_entry_t *i18n;
+    size_t i18n_count;
 } mosaic_app_package_t;
 
 extern const mosaic_app_descriptor_t *const mosaic_app_registry[];
