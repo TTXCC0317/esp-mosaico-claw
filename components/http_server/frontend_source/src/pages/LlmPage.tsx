@@ -117,7 +117,7 @@ const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
   },
   minimax_global: {
     llm_backend_type: 'anthropic_compatible',
-    llm_base_url: 'https://api.minimaxi.io/anthropic',
+    llm_base_url: 'https://api.minimax.io/anthropic/v1',
     llm_auth_type: 'none',
     llm_max_tokens_field: 'max_tokens',
     llm_default_image_max_bytes: '524288',
@@ -129,7 +129,7 @@ const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
   },
   minimax_cn: {
     llm_backend_type: 'anthropic_compatible',
-    llm_base_url: 'https://api.minimaxi.com/anthropic',
+    llm_base_url: 'https://api.minimaxi.com/anthropic/v1',
     llm_auth_type: 'none',
     llm_max_tokens_field: 'max_tokens',
     llm_default_image_max_bytes: '524288',
@@ -368,12 +368,18 @@ export const LlmPage: Component = () => {
   return (
     <TabShell>
       <PageHeader title={t('navLlm') as string} description={t('sectionLlm') as string} />
+      <Show when={tab.loading()}>
+        <div class="px-5 pt-4">
+          <Banner kind="info" message={t('statusLoading') as string} />
+        </div>
+      </Show>
       <Show when={validationError() ?? tab.error()}>
         <div class="px-5 pt-4">
           <Banner kind="error" message={validationError() ?? tab.error() ?? undefined} />
         </div>
       </Show>
-      <div class="divide-y divide-[var(--color-border-subtle)] mt-2">
+      {/* Wait for the loaded baseline before accepting edits. */}
+      <fieldset class="min-w-0 border-0 p-0 m-0 mt-2 divide-y divide-[var(--color-border-subtle)]" disabled={tab.loading()} aria-busy={tab.loading()}>
         <StaticConfigBlock title={t('sectionLlm') as string}>
           <div class="flex flex-col gap-3 pt-2">
             <div class="flex flex-col gap-2">
@@ -511,7 +517,7 @@ export const LlmPage: Component = () => {
             </div>
           </div>
         </CollapsibleConfigBlock>
-      </div>
+      </fieldset>
       <SavePanel
         dirty={tab.dirty()}
         saving={tab.saving()}
