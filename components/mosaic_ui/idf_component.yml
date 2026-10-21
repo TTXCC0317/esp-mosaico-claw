@@ -1,6 +1,5 @@
 ## Mosaic/GSP system UI backed by the shared display_service presenter.
 dependencies:
-  idf: ">=6.2"
   display_service:
     path: ../display_service
   audio_hub:
@@ -16,7 +15,7 @@ dependencies:
 
   mosaico_module_interact:
     git: https://github.com/esp-mosaico/esp-mosaico-bsp.git
-    version: 91e5e0b1aeb49d59697bb2db0f243d3463a786e6
+    version: 5f10831
     path: components/mosaico_module_interact
 
   weather_service:
@@ -31,7 +30,6 @@ dependencies:
   lua_module_vision:
     path: ../../third-party/esp-claw/components/lua_modules/lua_module_vision
   tda-2030/esp_vision_core: "^0.1.0"
-  espressif/lua: "^5.5.1"
   espressif/esp_asrc: "^1.0.0"
   espressif/esp-gsp:
     # version: "^1.2.0"
