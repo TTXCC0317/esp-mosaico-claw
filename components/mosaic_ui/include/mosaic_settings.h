@@ -23,9 +23,6 @@ extern "C" {
 #define MOSAIC_SETTINGS_LLM_URL_LEN     160U
 #define MOSAIC_SETTINGS_VERSION_LEN      32U
 #define MOSAIC_SETTINGS_SERIAL_LEN       18U
-#define MOSAIC_SETTINGS_UPDATE_TITLE_LEN 96U
-#define MOSAIC_SETTINGS_UPDATE_SUMMARY_LEN 256U
-#define MOSAIC_SETTINGS_UPDATE_PUBLISHED_AT_LEN 40U
 #define MOSAIC_SETTINGS_WIFI_SCAN_MAX   20U
 #define MOSAIC_SETTINGS_PHONE_QR_LEN    512U
 #define MOSAIC_SETTINGS_BATTERY_SUBSCRIBER_MAX 4U
@@ -127,25 +124,6 @@ typedef void (*mosaic_battery_event_cb_t)(
 typedef void (*mosaic_wifi_event_cb_t)(
     const mosaic_settings_network_t *info, void *user_ctx);
 
-typedef enum {
-    MOSAIC_SETTINGS_UPDATE_IDLE = 0,
-    MOSAIC_SETTINGS_UPDATE_CHECKING,
-    MOSAIC_SETTINGS_UPDATE_UP_TO_DATE,
-    MOSAIC_SETTINGS_UPDATE_AVAILABLE,
-    MOSAIC_SETTINGS_UPDATE_DEVICE_AHEAD,
-    MOSAIC_SETTINGS_UPDATE_FAILED,
-} mosaic_settings_update_state_t;
-
-typedef struct {
-    mosaic_settings_update_state_t state;
-    char latest_version[MOSAIC_SETTINGS_VERSION_LEN];
-    char title[MOSAIC_SETTINGS_UPDATE_TITLE_LEN];
-    char summary[MOSAIC_SETTINGS_UPDATE_SUMMARY_LEN];
-    char published_at[MOSAIC_SETTINGS_UPDATE_PUBLISHED_AT_LEN];
-    uint32_t sequence;
-    esp_err_t last_error;
-} mosaic_settings_update_t;
-
 typedef struct {
     char software_version[MOSAIC_SETTINGS_VERSION_LEN];
     char serial_number[MOSAIC_SETTINGS_SERIAL_LEN];
@@ -174,7 +152,6 @@ typedef struct {
         bool supports_vision;
     } llm;
     mosaic_settings_battery_t battery;
-    mosaic_settings_update_t update;
 } mosaic_settings_snapshot_t;
 
 typedef struct {
@@ -187,8 +164,6 @@ typedef struct {
     esp_err_t (*set_web_logs_enabled)(void *user_ctx, bool enabled);
     esp_err_t (*set_screen_timeout)(void *user_ctx, uint32_t timeout_ms);
     esp_err_t (*factory_reset)(void *user_ctx);
-    /** Start a metadata-only asynchronous update manifest check. */
-    esp_err_t (*request_update_check)(void *user_ctx);
     esp_err_t (*set_wifi_enabled)(void *user_ctx, bool enabled);
     /** Optional cached/live battery read. When NULL, get_battery falls back
      * to the last notify cache, then get_snapshot. */
@@ -222,7 +197,6 @@ esp_err_t mosaic_settings_set_volume(int volume, bool persist);
 esp_err_t mosaic_settings_set_vibration(bool enabled);
 esp_err_t mosaic_settings_set_screen_timeout(uint32_t timeout_ms);
 esp_err_t mosaic_settings_factory_reset(void);
-esp_err_t mosaic_settings_request_update_check(void);
 esp_err_t mosaic_settings_set_wifi_enabled(bool enabled);
 
 /** Read the shared Settings model used by Settings and setup flows. */

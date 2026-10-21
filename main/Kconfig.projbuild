@@ -72,16 +72,4 @@ menu "Default Search Settings"
 
 endmenu
 
-menu "Software Update Notification"
-
-    config APP_UPDATE_MANIFEST_URL
-        string "Update manifest HTTPS URL"
-        default ""
-        help
-            HTTPS URL of the metadata-only update manifest. Leaving this
-            empty keeps Check for Updates visible but reports that the service
-            is not configured. No firmware image is downloaded or installed.
-
-endmenu
-
 endmenu

@@ -26,7 +26,6 @@
 #include "mosaic_ui.h"
 #include "mosaic_button_platform.h"
 #include "weather_service.h"
-#include "update_check_service.h"
 #if CONFIG_ESP_BOARD_ESP_MOSAICO
 #include "mosaic_imu_platform.h"
 #endif
@@ -70,7 +69,6 @@
 #define APP_ENABLE_CLAW_TASKS     (1)
 #define APP_WEATHER_USER_AGENT \
     "esp-mosaico-claw/1.0 https://github.com/espressif/esp-claw"
-#define APP_UPDATE_USER_AGENT "esp-mosaico-claw/update-check"
 #define APP_ASR_PREBUFFER_MS   3000U
 #define APP_REGION_REFRESH_TIMEOUT_MS 30000U
 
@@ -954,15 +952,6 @@ void app_main(void)
         .refresh_interval_ms = 60U * 60U * 1000U,
         .stale_after_ms = 6U * 60U * 60U * 1000U,
     }));
-    ESP_ERROR_CHECK(update_check_service_init(
-        &(update_check_service_config_t) {
-            .manifest_url = CONFIG_APP_UPDATE_MANIFEST_URL,
-            .product = "esp-mosaico",
-            .current_version = edge_agent_get_version(),
-            .user_agent = APP_UPDATE_USER_AGENT,
-            .timeout_ms = 10000U,
-            .max_body_size = 4096U,
-        }));
     if (APP_ENABLE_CLAW_TASKS) {
         ESP_ERROR_CHECK(network_provisioning_service_create(
             &s_network_provisioning));
