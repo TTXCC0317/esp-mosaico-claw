@@ -310,6 +310,7 @@ static void app_cap_copy_app_to_llm_config(const app_claw_config_t *app_config,
 {
     strlcpy(llm_config->api_key, app_config->llm_api_key, sizeof(llm_config->api_key));
     strlcpy(llm_config->backend_type, app_config->llm_backend_type, sizeof(llm_config->backend_type));
+    strlcpy(llm_config->endpoint_provider, app_config->llm_endpoint_provider, sizeof(llm_config->endpoint_provider));
     strlcpy(llm_config->model, app_config->llm_model, sizeof(llm_config->model));
     strlcpy(llm_config->base_url, app_config->llm_base_url, sizeof(llm_config->base_url));
     strlcpy(llm_config->auth_type, app_config->llm_auth_type, sizeof(llm_config->auth_type));
@@ -336,6 +337,7 @@ static void app_cap_copy_llm_to_app_config(const cap_llm_config_t *llm_config,
 {
     strlcpy(app_config->llm_api_key, llm_config->api_key, sizeof(app_config->llm_api_key));
     strlcpy(app_config->llm_backend_type, llm_config->backend_type, sizeof(app_config->llm_backend_type));
+    strlcpy(app_config->llm_endpoint_provider, llm_config->endpoint_provider, sizeof(app_config->llm_endpoint_provider));
     strlcpy(app_config->llm_model, llm_config->model, sizeof(app_config->llm_model));
     strlcpy(app_config->llm_base_url, llm_config->base_url, sizeof(app_config->llm_base_url));
     strlcpy(app_config->llm_auth_type, llm_config->auth_type, sizeof(app_config->llm_auth_type));

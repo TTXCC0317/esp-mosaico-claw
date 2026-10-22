@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "audio_capture.h"
+#include "claw_endpoint.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -22,9 +23,9 @@ extern "C" {
 
 typedef struct asr_service_t *asr_service_handle_t;
 
+/** Realtime ASR wire protocol. Where to connect is chosen by `endpoint_provider`. */
 typedef enum {
     ASR_SERVICE_PROVIDER_QWEN = 0,
-    ASR_SERVICE_PROVIDER_TRIAL,
 } asr_service_provider_t;
 
 typedef enum {
@@ -37,6 +38,9 @@ typedef enum {
 
 typedef struct {
     asr_service_event_t event;
+    /* May be CLAW_ENDPOINT_ERR_CREDENTIAL_EXCHANGE when credentials could not
+     * be obtained, or CLAW_ENDPOINT_ERR_CREDENTIAL_REJECTED when the service
+     * kept rejecting them. */
     esp_err_t error;
     const char *text;
 } asr_service_event_data_t;
@@ -46,6 +50,9 @@ typedef void (*asr_service_event_cb_t)(asr_service_handle_t handle, const asr_se
 typedef struct {
     audio_capture_handle_t capture;
     asr_service_provider_t provider;
+    /* claw_endpoint provider interpreting `endpoint` and `api_key`;
+     * NULL selects the static provider. */
+    const char *endpoint_provider;
     const char *api_key;
     const char *workspace_id;
     const char *endpoint;
@@ -68,8 +75,7 @@ esp_err_t asr_service_start(asr_service_handle_t handle);
 
 /* Closes local capture at the next PCM frame without waiting for provider I/O.
  * A normal stop drains the captured tail and queued PCM before finish-task.
- * With discard=true, an in-progress provider startup is cancelled after its
- * current blocking connect call returns. */
+ * With discard=true, credential and startup waits observe cancellation. */
 esp_err_t asr_service_end_capture(asr_service_handle_t handle, bool discard);
 
 /* Stops streaming and optionally copies the final text into `text`.

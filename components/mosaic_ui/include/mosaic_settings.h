@@ -169,6 +169,7 @@ typedef struct {
         char model[MOSAIC_SETTINGS_LLM_MODEL_LEN];
         char base_url[MOSAIC_SETTINGS_LLM_URL_LEN];
         bool api_key_configured;
+        bool endpoint_configured;
         bool supports_tools;
         bool supports_vision;
     } llm;

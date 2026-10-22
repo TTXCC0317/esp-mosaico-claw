@@ -3,14 +3,16 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#include "trial_auth.h"
+#include "trial_token.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "cJSON.h"
-#include "llm/claw_llm_auth.h"
+#include "claw_endpoint.h"
+#include "claw_http.h"
 #include "esp_crt_bundle.h"
 #include "esp_app_desc.h"
 #include "esp_check.h"
@@ -23,15 +25,25 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/event_groups.h"
+#include "freertos/task.h"
 #include "psa/crypto.h"
 #include "psa_crypto_driver_esp_hmac_opaque.h"
 #include "psa_crypto_driver_esp_hmac_opaque_contexts.h"
+#include "trial_provider.h"
 
-static const char *TAG = "trial_auth";
+static const char *TAG = "trial_token";
 
 #define TRIAL_TOKEN_MAX_LEN 2048
-#define TRIAL_HTTP_TIMEOUT_MS 15000
+#define TRIAL_TOKEN_WAIT_MS 50U
+#define TRIAL_TOKEN_TASK_STACK 6144U
+#define TRIAL_TOKEN_TASK_PRIORITY 4
 #define TRIAL_TOKEN_REFRESH_MARGIN_MS (60LL * 1000LL)
+#define TRIAL_BACKOFF_INITIAL_MS (15LL * 1000LL)
+#define TRIAL_BACKOFF_MAX_MS (10LL * 60LL * 1000LL)
+#define TRIAL_HTTP_OK 200
+#define TRIAL_HTTP_UNAUTHORIZED 401
+#define TRIAL_HTTP_FORBIDDEN 403
 
 typedef struct {
     char *data;
@@ -42,17 +54,30 @@ typedef struct {
 typedef struct {
     char token[TRIAL_TOKEN_MAX_LEN];
     int64_t expires_at_ms;
+    uint32_t generation;
+    /* The service accepted this token at least once. */
+    bool verified;
+    /* Last server-side failure; repeated while backoff_until_ms is ahead. */
+    esp_err_t failure;
+    int64_t backoff_ms;
+    int64_t backoff_until_ms;
+    bool refreshing;
+    uint32_t refresh_sequence;
+    esp_err_t refresh_error;
 } token_cache_t;
 
+typedef struct {
+    trial_region_t region;
+    claw_endpoint_request_t request;
+} refresh_job_t;
+
 static SemaphoreHandle_t s_lock;
-static token_cache_t s_llm_token_cache;
-static token_cache_t s_asr_token_cache;
-static trial_auth_hmac_provider_fn s_hmac_provider;
+static EventGroupHandle_t s_refresh_events;
+static token_cache_t s_token_caches[TRIAL_REGION_COUNT];
+static uint32_t s_last_generation;
+static trial_provider_hmac_fn s_hmac_provider;
 
-static esp_err_t trial_auth_resolver(const char *auth_type, bool force_refresh,
-                                     char **out_token, void *user_ctx);
-
-const char *trial_auth_get_firmware_version(void)
+const char *trial_token_firmware_version(void)
 {
     const esp_app_desc_t *description = esp_app_get_description();
     return description && description->version[0] ? description->version : "unknown";
@@ -81,42 +106,35 @@ static bool response_append(response_buffer_t *buffer, const char *data, size_t 
     return true;
 }
 
-static esp_err_t http_event_handler(esp_http_client_event_t *event)
+static esp_err_t receive_body(const char *data, size_t size, void *ctx)
 {
-    response_buffer_t *buffer = event ? event->user_data : NULL;
-    if (!buffer || event->event_id != HTTP_EVENT_ON_DATA || event->data_len <= 0) {
-        return ESP_OK;
-    }
-    return response_append(buffer, event->data, (size_t)event->data_len)
-               ? ESP_OK
-               : ESP_ERR_NO_MEM;
+    return response_append(ctx, data, size) ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 static esp_err_t post_json(const char *url, const char *body,
+                           const claw_endpoint_request_t *request,
                            response_buffer_t *response, int *status_code)
 {
+    esp_err_t err = claw_endpoint_request_check(request);
+    if (err != ESP_OK) return err;
     esp_http_client_config_t config = {
         .url = url,
         .method = HTTP_METHOD_POST,
-        .event_handler = http_event_handler,
-        .user_data = response,
-        .timeout_ms = TRIAL_HTTP_TIMEOUT_MS,
+        .is_async = true,
+        .timeout_ms = claw_endpoint_request_remaining_ms(request),
         .buffer_size = 2048,
         .buffer_size_tx = 2048,
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        return ESP_ERR_NO_MEM;
+    if (!client) return ESP_ERR_NO_MEM;
+    err = esp_http_client_set_header(client, "Content-Type", "application/json");
+    if (err == ESP_OK) {
+        err = esp_http_client_set_header(client, TRIAL_FIRMWARE_VERSION_HEADER,
+                                         trial_token_firmware_version());
     }
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_header(client, TRIAL_AUTH_FIRMWARE_VERSION_HEADER,
-                               trial_auth_get_firmware_version());
-    esp_http_client_set_post_field(client, body, (int)strlen(body));
-    esp_err_t err = esp_http_client_perform(client);
-    if (err == ESP_OK && status_code) {
-        *status_code = esp_http_client_get_status_code(client);
-    }
+    if (err == ESP_OK) err = claw_http_send(client, body, request, receive_body, response);
+    if (err == ESP_OK && status_code) *status_code = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
     return err;
 }
@@ -167,7 +185,7 @@ static esp_err_t default_hmac_provider(uint32_t efuse_key_id, const void *messag
 
 static esp_err_t hmac_message(const char *message, size_t message_len, uint8_t out[32])
 {
-    trial_auth_hmac_provider_fn provider = s_hmac_provider
+    trial_provider_hmac_fn provider = s_hmac_provider
                                               ? s_hmac_provider
                                               : default_hmac_provider;
     return provider(CONFIG_TRIAL_DEVICE_HMAC_KEY_ID, message, message_len, out);
@@ -197,7 +215,19 @@ static size_t base64url_encode(const uint8_t *input, size_t input_len,
     return out;
 }
 
-static esp_err_t refresh_token_locked(const char *base_url, token_cache_t *token_cache)
+static esp_err_t http_failure(esp_err_t transport_err, int status)
+{
+    if (transport_err != ESP_OK) {
+        return transport_err;
+    }
+    if (status == TRIAL_HTTP_UNAUTHORIZED || status == TRIAL_HTTP_FORBIDDEN) {
+        return CLAW_ENDPOINT_ERR_CREDENTIAL_EXCHANGE;
+    }
+    return ESP_ERR_INVALID_RESPONSE;
+}
+
+static esp_err_t exchange_token(const char *base_url, token_cache_t *token_cache,
+                                 const claw_endpoint_request_t *request)
 {
     if (!base_url || !token_cache) {
         return ESP_ERR_INVALID_ARG;
@@ -221,12 +251,12 @@ static esp_err_t refresh_token_locked(const char *base_url, token_cache_t *token
     char challenge_url[128];
     snprintf(challenge_url, sizeof(challenge_url), "%s/v1/device/challenge",
              base_url);
-    err = post_json(challenge_url, challenge_body, &challenge_response, &status);
+    err = post_json(challenge_url, challenge_body, request, &challenge_response, &status);
     cJSON_free(challenge_body);
-    if (err != ESP_OK || status != 200 || !challenge_response.data) {
+    if (err != ESP_OK || status != TRIAL_HTTP_OK || !challenge_response.data) {
         ESP_LOGW(TAG, "Trial challenge request failed (status=%d)", status);
         free(challenge_response.data);
-        return err != ESP_OK ? err : ESP_FAIL;
+        return http_failure(err, status);
     }
 
     cJSON *challenge_root = cJSON_Parse(challenge_response.data);
@@ -237,7 +267,7 @@ static esp_err_t refresh_token_locked(const char *base_url, token_cache_t *token
     if (!challenge_id || !nonce) {
         cJSON_Delete(challenge_root);
         free(challenge_response.data);
-        return ESP_FAIL;
+        return ESP_ERR_INVALID_RESPONSE;
     }
 
     size_t message_len = strlen(challenge_id) + strlen(nonce) + strlen(device_id) + 7;
@@ -277,13 +307,14 @@ static esp_err_t refresh_token_locked(const char *base_url, token_cache_t *token
     snprintf(token_url, sizeof(token_url), "%s/v1/device/token",
              base_url);
     status = 0;
-    err = post_json(token_url, token_body, &token_response, &status);
+    err = post_json(token_url, token_body, request, &token_response, &status);
     cJSON_free(token_body);
     cJSON_Delete(challenge_root);
     free(challenge_response.data);
-    if (err != ESP_OK || status != 200 || !token_response.data) {
+    if (err != ESP_OK || status != TRIAL_HTTP_OK || !token_response.data) {
+        ESP_LOGW(TAG, "Trial token request failed (status=%d)", status);
         free(token_response.data);
-        return err != ESP_OK ? err : ESP_FAIL;
+        return http_failure(err, status);
     }
 
     cJSON *token_root = cJSON_Parse(token_response.data);
@@ -295,26 +326,32 @@ static esp_err_t refresh_token_locked(const char *base_url, token_cache_t *token
         strlen(access_token) >= sizeof(token_cache->token) || expires_in <= 0) {
         cJSON_Delete(token_root);
         free(token_response.data);
-        return ESP_FAIL;
+        return ESP_ERR_INVALID_RESPONSE;
     }
     strlcpy(token_cache->token, access_token, sizeof(token_cache->token));
     token_cache->expires_at_ms = esp_timer_get_time() / 1000 +
                                  (int64_t)expires_in * 1000;
+    token_cache->verified = false;
     cJSON_Delete(token_root);
     free(token_response.data);
     return ESP_OK;
 }
 
-esp_err_t trial_auth_init(void)
+esp_err_t trial_token_init(void)
 {
     if (!s_lock) {
         s_lock = xSemaphoreCreateMutex();
-        if (!s_lock) return ESP_ERR_NO_MEM;
     }
-    return claw_llm_register_auth_resolver("trial", trial_auth_resolver, NULL);
+    if (!s_refresh_events) s_refresh_events = xEventGroupCreate();
+    if (s_lock && s_refresh_events) return ESP_OK;
+    if (s_lock) vSemaphoreDelete(s_lock);
+    if (s_refresh_events) vEventGroupDelete(s_refresh_events);
+    s_lock = NULL;
+    s_refresh_events = NULL;
+    return ESP_ERR_NO_MEM;
 }
 
-esp_err_t trial_auth_validate_hmac_efuse_key(void)
+esp_err_t trial_provider_validate_hmac_efuse_key(void)
 {
 #if !defined(CONFIG_TRIAL_DEVICE_HMAC_KEY_ID)
     ESP_LOGI(TAG, "eFuse HMAC key check skipped: key ID is not configured");
@@ -359,7 +396,7 @@ esp_err_t trial_auth_validate_hmac_efuse_key(void)
 #endif
 }
 
-esp_err_t trial_auth_set_hmac_provider(trial_auth_hmac_provider_fn provider)
+esp_err_t trial_provider_set_hmac_provider(trial_provider_hmac_fn provider)
 {
     if (!provider) {
         return ESP_ERR_INVALID_ARG;
@@ -368,46 +405,192 @@ esp_err_t trial_auth_set_hmac_provider(trial_auth_hmac_provider_fn provider)
     return ESP_OK;
 }
 
-static esp_err_t get_token(const char *base_url, token_cache_t *token_cache,
-                           bool force_refresh, char **out_token)
+static int64_t now_ms(void)
 {
-    if (!base_url || !token_cache || !out_token) return ESP_ERR_INVALID_ARG;
-    *out_token = NULL;
-    if (!s_lock) {
-        esp_err_t err = trial_auth_init();
-        if (err != ESP_OK) return err;
+    return esp_timer_get_time() / 1000;
+}
+
+static bool failure_is_server_side(esp_err_t err)
+{
+    return err == CLAW_ENDPOINT_ERR_CREDENTIAL_EXCHANGE ||
+           err == CLAW_ENDPOINT_ERR_CREDENTIAL_REJECTED ||
+           err == ESP_ERR_INVALID_RESPONSE;
+}
+
+static void drop_token_locked(token_cache_t *cache)
+{
+    cache->token[0] = '\0';
+    cache->expires_at_ms = 0;
+    cache->verified = false;
+}
+
+static void record_failure_locked(token_cache_t *cache, esp_err_t err)
+{
+    if (!failure_is_server_side(err)) {
+        return;
     }
+    cache->failure = err;
+    cache->backoff_ms = cache->backoff_ms
+        ? (cache->backoff_ms * 2 > TRIAL_BACKOFF_MAX_MS ? TRIAL_BACKOFF_MAX_MS : cache->backoff_ms * 2)
+        : TRIAL_BACKOFF_INITIAL_MS;
+    cache->backoff_until_ms = now_ms() + cache->backoff_ms;
+    ESP_LOGW(TAG, "Trial credentials unavailable (%s), backing off %lld s",
+             claw_endpoint_err_to_name(err), (long long)(cache->backoff_ms / 1000));
+}
+
+static void clear_failure_locked(token_cache_t *cache)
+{
+    cache->failure = ESP_OK;
+    cache->backoff_ms = 0;
+    cache->backoff_until_ms = 0;
+}
+
+static token_cache_t *find_generation_locked(uint32_t generation)
+{
+    for (size_t i = 0; i < TRIAL_REGION_COUNT; i++) {
+        if (generation && s_token_caches[i].generation == generation) {
+            return &s_token_caches[i];
+        }
+    }
+    return NULL;
+}
+
+/* A region has at most one exchange in flight. The job owns its deadline;
+ * individual waiters can leave without invalidating its buffers or context. */
+static void refresh_task(void *arg)
+{
+    refresh_job_t *job = arg;
+    token_cache_t *fresh = calloc(1, sizeof(*fresh));
+    esp_err_t err = fresh ? exchange_token(trial_region_server_url(job->region), fresh, &job->request)
+                          : ESP_ERR_NO_MEM;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    int64_t now = esp_timer_get_time() / 1000;
-    if (force_refresh || !token_cache->token[0] ||
-        now + TRIAL_TOKEN_REFRESH_MARGIN_MS >= token_cache->expires_at_ms) {
-        esp_err_t err = refresh_token_locked(base_url, token_cache);
-        if (err != ESP_OK) {
+    token_cache_t *cache = &s_token_caches[job->region];
+    if (err == ESP_OK) {
+        strlcpy(cache->token, fresh->token, sizeof(cache->token));
+        cache->expires_at_ms = fresh->expires_at_ms;
+        if (++s_last_generation == 0) ++s_last_generation;
+        cache->generation = s_last_generation;
+        cache->verified = false;
+    } else {
+        record_failure_locked(cache, err);
+        if (now_ms() >= cache->expires_at_ms) drop_token_locked(cache);
+    }
+    cache->refresh_error = err;
+    cache->refresh_sequence++;
+    cache->refreshing = false;
+    xEventGroupSetBits(s_refresh_events, BIT(job->region));
+    xSemaphoreGive(s_lock);
+    free(fresh);
+    free(job);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t copy_token_locked(const token_cache_t *cache, char **out_token,
+                                   uint32_t *out_generation)
+{
+    *out_token = strdup(cache->token);
+    if (!*out_token) return ESP_ERR_NO_MEM;
+    *out_generation = cache->generation;
+    return ESP_OK;
+}
+
+esp_err_t trial_token_get(trial_region_t region, const claw_endpoint_request_t *request,
+                          char **out_token, uint32_t *out_generation)
+{
+    if (!trial_region_server_url(region) || !request || !out_token || !out_generation) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_token = NULL;
+    *out_generation = 0;
+    if (!s_lock || !s_refresh_events) return ESP_ERR_INVALID_STATE;
+
+    token_cache_t *cache = &s_token_caches[region];
+    bool waiting = false;
+    uint32_t sequence = 0;
+    for (;;) {
+        esp_err_t err = claw_endpoint_request_check(request);
+        if (err != ESP_OK) return err;
+        uint32_t remaining = claw_endpoint_request_remaining_ms(request);
+        uint32_t wait_ms = remaining < TRIAL_TOKEN_WAIT_MS ? remaining : TRIAL_TOKEN_WAIT_MS;
+        TickType_t ticks = pdMS_TO_TICKS(wait_ms);
+        if (!ticks) ticks = 1;
+        if (xSemaphoreTake(s_lock, ticks) != pdTRUE) continue;
+        int64_t now = now_ms();
+        const bool usable = cache->token[0] && now < cache->expires_at_ms;
+        const bool refreshed = waiting && sequence != cache->refresh_sequence;
+        const bool backoff = cache->failure != ESP_OK && now < cache->backoff_until_ms;
+        if (usable && (now + TRIAL_TOKEN_REFRESH_MARGIN_MS < cache->expires_at_ms ||
+                       cache->refreshing || refreshed || backoff)) {
+            err = copy_token_locked(cache, out_token, out_generation);
             xSemaphoreGive(s_lock);
             return err;
         }
+        if (backoff || (refreshed && cache->refresh_error != ESP_OK)) {
+            err = backoff ? cache->failure : cache->refresh_error;
+            xSemaphoreGive(s_lock);
+            return err;
+        }
+        if (!cache->refreshing) {
+            refresh_job_t *job = calloc(1, sizeof(*job));
+            if (!job) {
+                xSemaphoreGive(s_lock);
+                return ESP_ERR_NO_MEM;
+            }
+            job->region = region;
+            job->request.deadline_ms = request->deadline_ms;
+            cache->refreshing = true;
+            xEventGroupClearBits(s_refresh_events, BIT(region));
+            if (xTaskCreate(refresh_task, "trial_token", TRIAL_TOKEN_TASK_STACK, job,
+                             TRIAL_TOKEN_TASK_PRIORITY, NULL) != pdPASS) {
+                cache->refreshing = false;
+                free(job);
+                xSemaphoreGive(s_lock);
+                return ESP_ERR_NO_MEM;
+            }
+        }
+        sequence = cache->refresh_sequence;
+        waiting = true;
+        xSemaphoreGive(s_lock);
+        (void)xEventGroupWaitBits(s_refresh_events, BIT(region), pdFALSE, pdFALSE, ticks);
     }
-    *out_token = strdup(token_cache->token);
+}
+
+void trial_token_accept(uint32_t generation)
+{
+    if (!s_lock) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    token_cache_t *cache = find_generation_locked(generation);
+    if (cache && cache->token[0]) {
+        cache->verified = true;
+        clear_failure_locked(cache);
+    }
     xSemaphoreGive(s_lock);
-    return *out_token ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-esp_err_t trial_auth_get_llm_token(bool force_refresh, char **out_token)
+bool trial_token_reject(uint32_t generation)
 {
-    return get_token(TRIAL_AUTH_DEFAULT_LLM_BASE_URL, &s_llm_token_cache,
-                     force_refresh, out_token);
-}
+    bool retry = true;
 
-esp_err_t trial_auth_get_asr_token(bool force_refresh, char **out_token)
-{
-    return get_token(TRIAL_AUTH_DEFAULT_ASR_BASE_URL, &s_asr_token_cache,
-                     force_refresh, out_token);
-}
-
-static esp_err_t trial_auth_resolver(const char *auth_type, bool force_refresh,
-                                     char **out_token, void *user_ctx)
-{
-    (void)auth_type;
-    (void)user_ctx;
-    return trial_auth_get_llm_token(force_refresh, out_token);
+    if (!s_lock) {
+        return false;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    token_cache_t *cache = find_generation_locked(generation);
+    if (!cache) {
+        /* Already superseded by a newer token. */
+    } else if (!cache->token[0]) {
+        retry = cache->failure == ESP_OK;
+    } else if (cache->verified) {
+        ESP_LOGW(TAG, "Trial token expired or revoked, exchanging a new one");
+        drop_token_locked(cache);
+    } else {
+        ESP_LOGW(TAG, "Freshly issued Trial token was rejected");
+        drop_token_locked(cache);
+        record_failure_locked(cache, CLAW_ENDPOINT_ERR_CREDENTIAL_REJECTED);
+        retry = false;
+    }
+    xSemaphoreGive(s_lock);
+    return retry;
 }

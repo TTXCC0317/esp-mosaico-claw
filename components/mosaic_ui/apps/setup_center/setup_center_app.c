@@ -42,6 +42,8 @@
 #define SETUP_PAGE_LLM      3U
 #define SETUP_PAGE_DONE     4U
 #define SETUP_PAGE_INTEGRATIONS 5U
+#define SETUP_PAGE_REGION   6U
+#define SETUP_PAGE_LAST     SETUP_PAGE_REGION
 #define SETUP_NETWORK_MOCK_COUNT 10U
 #define SETUP_PASSWORD_MIN  8U
 #define SETUP_PROGRESS_COUNT 12U
@@ -50,6 +52,9 @@
 #define SETUP_NETWORK_JOIN_US 3000000LL
 #define SETUP_WECHAT_REAL_STAGE_US 500000LL
 #define SETUP_LLM_CONFIG_US 2200000LL
+#define SETUP_REGION_WAIT_SECONDS 10U
+#define SETUP_REGION_WAIT_US ((int64_t)SETUP_REGION_WAIT_SECONDS * 1000000LL)
+#define SETUP_REGION_TEXT_LEN 32U
 #define SETUP_QR_SIZE 256U
 #define SETUP_QR_STRIDE (SETUP_QR_SIZE * 2U)
 #define SETUP_QR_BYTES ((size_t)SETUP_QR_STRIDE * SETUP_QR_SIZE)
@@ -90,6 +95,11 @@ typedef enum {
 } setup_wechat_entry_t;
 
 typedef enum {
+    SETUP_REGION_WAITING = 0,
+    SETUP_REGION_CHOOSE,
+} setup_region_phase_t;
+
+typedef enum {
     SETUP_LLM_STATUS = 0,
     SETUP_LLM_CONFIGURING,
     SETUP_LLM_PROGRESS,
@@ -122,6 +132,11 @@ typedef struct {
     setup_wechat_phase_t wechat_phase;
     wechat_binding_flow_t wechat_flow;
     setup_llm_phase_t llm_phase;
+    setup_region_phase_t region_phase;
+    mosaic_setup_region_ops_t region_ops;
+    mosaic_setup_region_t region;
+    int64_t region_started_us;
+    uint8_t rendered_region_second;
     char selected_ssid[MOSAIC_SETTINGS_SSID_LEN];
     char connected_ssid[MOSAIC_SETTINGS_SSID_LEN];
     bool network_join_success;
@@ -279,6 +294,45 @@ esp_err_t mosaic_setup_get_wechat_service(
     *ret_revision = s_setup.wechat_revision;
     SETUP_MODEL_UNLOCK();
     return ESP_OK;
+}
+
+esp_err_t mosaic_setup_configure_region(
+    const mosaic_setup_region_ops_t *ops)
+{
+    if (ops == NULL || ops->detect == NULL || ops->select == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    SETUP_MODEL_LOCK();
+    s_setup.region_ops = *ops;
+    SETUP_MODEL_UNLOCK();
+    return ESP_OK;
+}
+
+esp_err_t mosaic_setup_set_region(mosaic_setup_region_t region)
+{
+    if (region > MOSAIC_SETUP_REGION_INTERNATIONAL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    SETUP_MODEL_LOCK();
+    s_setup.region = region;
+    SETUP_MODEL_UNLOCK();
+    return ESP_OK;
+}
+
+static mosaic_setup_region_t setup_region_current(void)
+{
+    SETUP_MODEL_LOCK();
+    const mosaic_setup_region_t region = s_setup.region;
+    SETUP_MODEL_UNLOCK();
+    return region;
+}
+
+static mosaic_setup_region_ops_t setup_region_ops(void)
+{
+    SETUP_MODEL_LOCK();
+    const mosaic_setup_region_ops_t ops = s_setup.region_ops;
+    SETUP_MODEL_UNLOCK();
+    return ops;
 }
 
 static bool setup_wechat_has_backend(void)
@@ -1075,7 +1129,7 @@ static bool setup_navigation_allowed(int64_t now_us)
 
 static bool setup_push(uint16_t page, bool animated, int64_t now_us)
 {
-    if (s_setup.ui == NULL || page > SETUP_PAGE_INTEGRATIONS ||
+    if (s_setup.ui == NULL || page > SETUP_PAGE_LAST ||
             !setup_navigation_allowed(now_us)) {
         return false;
     }
@@ -1517,21 +1571,104 @@ static void setup_network_apply_model(int64_t now_us)
     setup_overview_render();
 }
 
-static void setup_advance_after_network(int64_t now_us)
-{
-    if (s_setup.mode == MOSAIC_SETUP_MODE_ONBOARDING) {
-        setup_open_wechat(now_us, SETUP_WECHAT_ENTRY_ONBOARDING);
-    } else {
-        setup_overview_render();
-        (void)setup_pop(s_setup.overview_page, now_us);
-    }
-}
-
 static void setup_finish_onboarding(int64_t now_us)
 {
     s_setup.onboarding_complete = true;
     setup_overview_render();
     (void)setup_push(SETUP_PAGE_DONE, true, now_us);
+}
+
+static void setup_region_render(int64_t now_us)
+{
+    const bool waiting = s_setup.region_phase == SETUP_REGION_WAITING;
+    (void)gsp_setup_center_setup_region_waiting_set_visible(s_setup.ui, waiting);
+    (void)gsp_setup_center_setup_region_choose_set_visible(s_setup.ui, !waiting);
+    if (!waiting) {
+        return;
+    }
+    int64_t elapsed_s = (now_us - s_setup.region_started_us) / 1000000LL + 1;
+    if (elapsed_s > SETUP_REGION_WAIT_SECONDS) {
+        elapsed_s = SETUP_REGION_WAIT_SECONDS;
+    }
+    if ((uint8_t)elapsed_s == s_setup.rendered_region_second) {
+        return;
+    }
+    char text[SETUP_REGION_TEXT_LEN];
+    snprintf(text, sizeof(text), "Please wait (%u/%u)",
+             (unsigned)elapsed_s, (unsigned)SETUP_REGION_WAIT_SECONDS);
+    (void)gsp_setup_center_setup_region_wait_text_set_text(s_setup.ui, text);
+    s_setup.rendered_region_second = (uint8_t)elapsed_s;
+}
+
+/* WeChat binding is offered during onboarding only in mainland China. */
+static void setup_advance_after_region(int64_t now_us, mosaic_setup_region_t region)
+{
+    if (region == MOSAIC_SETUP_REGION_MAINLAND) {
+        setup_open_wechat(now_us, SETUP_WECHAT_ENTRY_ONBOARDING);
+    } else {
+        s_setup.wechat_skipped = !s_setup.wechat_configured;
+        setup_finish_onboarding(now_us);
+    }
+}
+
+static void setup_open_region(int64_t now_us)
+{
+    const mosaic_setup_region_t region = setup_region_current();
+    if (region != MOSAIC_SETUP_REGION_UNKNOWN) {
+        setup_advance_after_region(now_us, region);
+        return;
+    }
+
+    const mosaic_setup_region_ops_t ops = setup_region_ops();
+    const bool can_detect = s_setup.network_configured && ops.detect != NULL &&
+        ops.detect(ops.user_ctx, (uint32_t)(SETUP_REGION_WAIT_US / 1000LL)) == ESP_OK;
+    s_setup.region_phase = can_detect ? SETUP_REGION_WAITING : SETUP_REGION_CHOOSE;
+    s_setup.region_started_us = now_us;
+    s_setup.rendered_region_second = 0;
+    setup_region_render(now_us);
+    (void)setup_push(SETUP_PAGE_REGION, true, now_us);
+}
+
+static void setup_region_select(int64_t now_us, mosaic_setup_region_t region)
+{
+    if (s_setup.page != SETUP_PAGE_REGION || s_setup.region_phase != SETUP_REGION_CHOOSE) {
+        return;
+    }
+    const mosaic_setup_region_ops_t ops = setup_region_ops();
+    if (ops.select != NULL) {
+        const esp_err_t err = ops.select(ops.user_ctx, region);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "store selected region failed: %s", esp_err_to_name(err));
+        }
+    }
+    setup_advance_after_region(now_us, region);
+}
+
+static void setup_region_step(int64_t now_us)
+{
+    if (s_setup.page != SETUP_PAGE_REGION || s_setup.region_phase != SETUP_REGION_WAITING ||
+            !setup_navigation_allowed(now_us)) {
+        return;
+    }
+    const mosaic_setup_region_t region = setup_region_current();
+    if (region != MOSAIC_SETUP_REGION_UNKNOWN) {
+        setup_advance_after_region(now_us, region);
+    } else if (now_us - s_setup.region_started_us >= SETUP_REGION_WAIT_US) {
+        s_setup.region_phase = SETUP_REGION_CHOOSE;
+        setup_region_render(now_us);
+    } else {
+        setup_region_render(now_us);
+    }
+}
+
+static void setup_advance_after_network(int64_t now_us)
+{
+    if (s_setup.mode == MOSAIC_SETUP_MODE_ONBOARDING) {
+        setup_open_region(now_us);
+    } else {
+        setup_overview_render();
+        (void)setup_pop(s_setup.overview_page, now_us);
+    }
 }
 
 static bool setup_return_to_requester(void)
@@ -1762,6 +1899,12 @@ static void setup_handle_call(const mosaic_event_t *event)
                 ? SETUP_PAGE_WECHAT : s_setup.overview_page, now_us);
         }
         break;
+    case GSP_ACT_ID_SETUP_REGION_MAINLAND:
+        setup_region_select(now_us, MOSAIC_SETUP_REGION_MAINLAND);
+        break;
+    case GSP_ACT_ID_SETUP_REGION_INTERNATIONAL:
+        setup_region_select(now_us, MOSAIC_SETUP_REGION_INTERNATIONAL);
+        break;
     case GSP_ACT_ID_SETUP_VIEW_STATUS:
         s_setup.mode = MOSAIC_SETUP_MODE_MANAGE;
         setup_navigation_render();
@@ -1791,6 +1934,7 @@ static void setup_step(int64_t now_us)
 {
     setup_wechat_apply_model(now_us);
     setup_network_apply_model(now_us);
+    setup_region_step(now_us);
     if (s_setup.page == SETUP_PAGE_WECHAT &&
             s_setup.wechat_phase == SETUP_WECHAT_BINDING &&
             now_us >= s_setup.navigation_guard_until_us &&

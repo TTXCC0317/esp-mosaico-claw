@@ -15,6 +15,7 @@ type PresetKey = 'qwen' | 'trial';
 
 type AsrForm = {
   asr_provider: string;
+  asr_endpoint_provider: string;
   asr_api_key: string;
   asr_workspace_id: string;
   asr_language_hint: string;
@@ -25,15 +26,17 @@ type AsrForm = {
 const PRESETS: Record<PresetKey, Omit<AsrForm, 'asr_api_key' | 'asr_workspace_id'>> = {
   qwen: {
     asr_provider: 'qwen',
+    asr_endpoint_provider: 'static',
     asr_language_hint: 'zh',
     asr_model: 'fun-asr-realtime',
     asr_endpoint: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference',
   },
   trial: {
-    asr_provider: 'trial',
+    asr_provider: 'qwen',
+    asr_endpoint_provider: 'trial',
     asr_language_hint: 'zh',
     asr_model: 'device-asr',
-    asr_endpoint: 'wss://as1.esp-claw.com/v1/asr/realtime',
+    asr_endpoint: '',
   },
 };
 
@@ -43,6 +46,7 @@ export const AsrPage: Component = () => {
     groups: ['asr'],
     toForm: (config: Partial<AppConfig>) => ({
       asr_provider: config.asr_provider ?? 'qwen',
+      asr_endpoint_provider: config.asr_endpoint_provider || 'static',
       asr_api_key: config.asr_api_key ?? '',
       asr_workspace_id: config.asr_workspace_id ?? '',
       asr_language_hint: config.asr_language_hint ?? 'zh',
@@ -51,6 +55,7 @@ export const AsrPage: Component = () => {
     }),
     fromForm: (form) => ({
       asr_provider: form.asr_provider.trim(),
+      asr_endpoint_provider: form.asr_endpoint_provider.trim(),
       asr_api_key: form.asr_api_key.trim(),
       asr_workspace_id: form.asr_workspace_id.trim(),
       asr_language_hint: form.asr_language_hint.trim(),
@@ -63,6 +68,7 @@ export const AsrPage: Component = () => {
 
   createEffect(() => {
     void tab.form.asr_provider;
+    void tab.form.asr_endpoint_provider;
     void tab.form.asr_api_key;
     void tab.form.asr_workspace_id;
     void tab.form.asr_language_hint;
@@ -77,6 +83,7 @@ export const AsrPage: Component = () => {
       tab.setForm('asr_api_key', '');
     }
     tab.setForm('asr_provider', preset.asr_provider);
+    tab.setForm('asr_endpoint_provider', preset.asr_endpoint_provider);
     tab.setForm('asr_language_hint', preset.asr_language_hint);
     tab.setForm('asr_model', preset.asr_model);
     tab.setForm('asr_endpoint', preset.asr_endpoint);
@@ -87,10 +94,12 @@ export const AsrPage: Component = () => {
     const required: Array<[string, string]> = [
       [tab.form.asr_provider, t('asrProvider') as string],
       [tab.form.asr_model, t('asrModel') as string],
-      [tab.form.asr_endpoint, t('asrEndpoint') as string],
     ];
-    if (tab.form.asr_provider !== 'trial') {
-      required.push([tab.form.asr_api_key, t('asrApiKey') as string]);
+    if (!tab.form.asr_endpoint_provider || tab.form.asr_endpoint_provider === 'static') {
+      required.push(
+        [tab.form.asr_endpoint, t('asrEndpoint') as string],
+        [tab.form.asr_api_key, t('asrApiKey') as string],
+      );
     }
     const missing = required.filter(([value]) => !value.trim()).map(([, label]) => label);
     if (missing.length > 0) {
@@ -136,6 +145,11 @@ export const AsrPage: Component = () => {
         </StaticConfigBlock>
         <StaticConfigBlock title={t('asrSection') as string}>
           <div class="grid gap-3 sm:grid-cols-2 pt-2">
+            <TextInput
+              label={t('llmEndpointProvider')}
+              value={tab.form.asr_endpoint_provider}
+              onInput={(event) => tab.setForm('asr_endpoint_provider', event.currentTarget.value)}
+            />
             <TextInput
               label={t('asrProvider')}
               value={tab.form.asr_provider}

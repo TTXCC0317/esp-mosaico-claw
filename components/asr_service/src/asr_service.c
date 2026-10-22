@@ -18,7 +18,6 @@
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "trial_auth.h"
 
 static const char *TAG = "asr_service";
 
@@ -89,15 +88,20 @@ struct asr_service_t {
     volatile bool provider_ready;
     volatile bool capture_done;
     esp_err_t stream_error;
-    char api_key[ASR_SERVICE_STR_LEN];
+    claw_endpoint_handle_t endpoint;
     char workspace_id[ASR_SERVICE_STR_LEN];
-    char endpoint[ASR_SERVICE_STR_LEN];
     char model[ASR_SERVICE_MODEL_LEN];
     char language_hint[ASR_SERVICE_SHORT_STR_LEN];
     uint32_t connect_timeout_ms;
     uint32_t send_timeout_ms;
     uint32_t prebuffer_ms;
 };
+
+static bool provider_startup_cancelled(void *ctx)
+{
+    asr_service_handle_t service = ctx;
+    return service->cancel_requested || service->stop_requested;
+}
 
 static void asr_service_capture_task(void *arg);
 static void asr_service_sender_task(void *arg);
@@ -204,8 +208,6 @@ static const asr_provider_ops_t *get_provider_ops(asr_service_provider_t provide
     switch (provider) {
     case ASR_SERVICE_PROVIDER_QWEN:
         return asr_provider_qwen_ops();
-    case ASR_SERVICE_PROVIDER_TRIAL:
-        return asr_provider_trial_ops();
     default:
         return NULL;
     }
@@ -422,11 +424,6 @@ esp_err_t asr_service_create(const asr_service_config_t *config, asr_service_han
         ESP_LOGE(TAG, "ASR capture handle is unavailable");
         return ESP_ERR_INVALID_ARG;
     }
-    if (config->provider != ASR_SERVICE_PROVIDER_TRIAL &&
-            (!config->api_key || !config->api_key[0])) {
-        ESP_LOGE(TAG, "ASR api key is empty");
-        return ESP_ERR_INVALID_ARG;
-    }
 
     const asr_provider_ops_t *ops = get_provider_ops(config->provider);
     if (!ops) {
@@ -453,24 +450,25 @@ esp_err_t asr_service_create(const asr_service_config_t *config, asr_service_han
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_err_t err = config->provider == ASR_SERVICE_PROVIDER_TRIAL
-                        ? copy_optional_string(service->api_key, sizeof(service->api_key), config->api_key, "api_key")
-                        : copy_required_string(service->api_key, sizeof(service->api_key), config->api_key, "api_key");
-    if (err == ESP_OK) err = copy_optional_string(service->workspace_id, sizeof(service->workspace_id), config->workspace_id, "workspace_id");
-    if (err == ESP_OK) {
-        err = copy_required_string(service->endpoint, sizeof(service->endpoint),
-                                   str_or_default(config->endpoint,
-                                                  config->provider == ASR_SERVICE_PROVIDER_TRIAL
-                                                      ? TRIAL_AUTH_DEFAULT_ASR_ENDPOINT
-                                                      : ASR_SERVICE_DEFAULT_ENDPOINT),
-                                   "endpoint");
-    }
+    esp_err_t err = copy_optional_string(service->workspace_id, sizeof(service->workspace_id), config->workspace_id, "workspace_id");
     if (err == ESP_OK) err = copy_required_string(service->model, sizeof(service->model), str_or_default(config->model, ASR_SERVICE_DEFAULT_MODEL), "model");
     if (err == ESP_OK) {
         err = copy_optional_string(service->language_hint,
                                    sizeof(service->language_hint),
                                    str_or_default(config->language_hint, ASR_SERVICE_DEFAULT_LANGUAGE_HINT),
                                    "language_hint");
+    }
+    if (err == ESP_OK) {
+        err = claw_endpoint_create(config->endpoint_provider,
+                                   &(claw_endpoint_config_t) {
+                                       .service = CLAW_ENDPOINT_SERVICE_ASR,
+                                       .base_url = str_or_default(config->endpoint, ASR_SERVICE_DEFAULT_ENDPOINT),
+                                       .api_key = config->api_key,
+                                   },
+                                   &service->endpoint);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "ASR endpoint create failed: %s", esp_err_to_name(err));
+        }
     }
     if (err != ESP_OK) {
         free(service);
@@ -490,17 +488,18 @@ esp_err_t asr_service_create(const asr_service_config_t *config, asr_service_han
         if (service->pcm_lock) vSemaphoreDelete(service->pcm_lock);
         if (service->pcm_ready) vSemaphoreDelete(service->pcm_ready);
         if (service->events) vEventGroupDelete(service->events);
+        claw_endpoint_delete(service->endpoint);
         free(service);
         return ESP_ERR_NO_MEM;
     }
 
     asr_provider_config_t provider_config = {
-        .api_key = service->api_key,
-        .workspace_id = service->workspace_id[0] ? service->workspace_id : NULL,
         .endpoint = service->endpoint,
+        .is_cancelled = provider_startup_cancelled,
+        .cancel_ctx = service,
+        .workspace_id = service->workspace_id[0] ? service->workspace_id : NULL,
         .model = service->model,
         .language_hint = service->language_hint,
-        .trial_auth = config->provider == ASR_SERVICE_PROVIDER_TRIAL,
         .connect_timeout_ms = service->connect_timeout_ms,
         .send_timeout_ms = service->send_timeout_ms,
         .result_cb = provider_result_cb,
@@ -514,6 +513,7 @@ esp_err_t asr_service_create(const asr_service_config_t *config, asr_service_han
         vSemaphoreDelete(service->pcm_lock);
         vSemaphoreDelete(service->control_lock);
         vSemaphoreDelete(service->lock);
+        claw_endpoint_delete(service->endpoint);
         free(service);
         return err;
     }
@@ -535,6 +535,7 @@ esp_err_t asr_service_create(const asr_service_config_t *config, asr_service_han
         vSemaphoreDelete(service->pcm_lock);
         vSemaphoreDelete(service->control_lock);
         vSemaphoreDelete(service->lock);
+        claw_endpoint_delete(service->endpoint);
         free(service);
         return ESP_ERR_NO_MEM;
     }
@@ -1074,6 +1075,7 @@ void asr_service_delete(asr_service_handle_t handle)
         xSemaphoreGive(handle->control_lock);
     }
 
+    claw_endpoint_delete(handle->endpoint);
     free(handle->last_text);
     free(handle->frame);
     free(handle->send_frame);

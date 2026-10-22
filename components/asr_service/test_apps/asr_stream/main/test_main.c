@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "asr_provider.h"
+#include "claw_endpoint.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_event.h"
@@ -78,13 +79,24 @@ static void asr_test_provider_result_cb(asr_provider_handle_t handle, asr_provid
     }
 }
 
+static claw_endpoint_config_t asr_test_endpoint_config(const char *api_key, const char *url)
+{
+    return (claw_endpoint_config_t) {
+        .service = CLAW_ENDPOINT_SERVICE_ASR,
+        .base_url = url,
+        .api_key = api_key,
+    };
+}
+
 TEST_CASE("asr provider rejects invalid arguments", "[asr][provider]")
 {
     const asr_provider_ops_t *ops = asr_provider_qwen_ops();
     asr_provider_handle_t provider = NULL;
+    claw_endpoint_handle_t endpoint = NULL;
+    claw_endpoint_config_t endpoint_cfg = asr_test_endpoint_config(ASR_TEST_FAKE_API_KEY, ASR_TEST_DEFAULT_ENDPOINT);
+    TEST_ESP_OK(claw_endpoint_create(NULL, &endpoint_cfg, &endpoint));
     asr_provider_config_t cfg = {
-        .api_key = ASR_TEST_FAKE_API_KEY,
-        .endpoint = ASR_TEST_DEFAULT_ENDPOINT,
+        .endpoint = endpoint,
         .model = ASR_TEST_DEFAULT_MODEL,
         .language_hint = ASR_TEST_LANGUAGE_HINT,
         .connect_timeout_ms = 30000,
@@ -102,16 +114,19 @@ TEST_CASE("asr provider rejects invalid arguments", "[asr][provider]")
     char text[2] = {0};
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, ops->get_final_text(NULL, text, sizeof(text)));
 
-    cfg.api_key = "";
+    claw_endpoint_handle_t rejected = NULL;
+    endpoint_cfg = asr_test_endpoint_config("", ASR_TEST_DEFAULT_ENDPOINT);
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, claw_endpoint_create(NULL, &endpoint_cfg, &rejected));
+    endpoint_cfg = asr_test_endpoint_config(ASR_TEST_FAKE_API_KEY, "");
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, claw_endpoint_create(NULL, &endpoint_cfg, &rejected));
+
+    cfg.endpoint = NULL;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, ops->create(&cfg, &provider));
 
-    cfg.api_key = ASR_TEST_FAKE_API_KEY;
-    cfg.endpoint = "";
-    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, ops->create(&cfg, &provider));
-
-    cfg.endpoint = ASR_TEST_DEFAULT_ENDPOINT;
+    cfg.endpoint = endpoint;
     cfg.model = "";
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, ops->create(&cfg, &provider));
+    claw_endpoint_delete(endpoint);
 }
 
 static esp_err_t send_embedded_pcm_to_qwen(asr_provider_handle_t provider, const asr_provider_ops_t *ops)
@@ -157,10 +172,13 @@ TEST_CASE("asr qwen streams embedded mandarin pcm", "[asr][qwen][pcm]")
 
     asr_test_event_counts_t counts = {0};
     asr_provider_handle_t provider = NULL;
+    claw_endpoint_handle_t endpoint = NULL;
+    claw_endpoint_config_t endpoint_cfg = asr_test_endpoint_config(CONFIG_ASR_TEST_QWEN_API_KEY,
+                                                                   ASR_TEST_DEFAULT_ENDPOINT);
+    TEST_ESP_OK(claw_endpoint_create(NULL, &endpoint_cfg, &endpoint));
     asr_provider_config_t provider_cfg = {
-        .api_key = CONFIG_ASR_TEST_QWEN_API_KEY,
+        .endpoint = endpoint,
         .workspace_id = NULL,
-        .endpoint = ASR_TEST_DEFAULT_ENDPOINT,
         .model = ASR_TEST_DEFAULT_MODEL,
         .language_hint = ASR_TEST_LANGUAGE_HINT,
         .connect_timeout_ms = 30000,
@@ -183,6 +201,7 @@ TEST_CASE("asr qwen streams embedded mandarin pcm", "[asr][qwen][pcm]")
         ESP_LOGI(TAG, "Qwen PCM final text returned %s, final=\"%s\"", esp_err_to_name(text_err), text);
         ops->delete(provider);
     }
+    claw_endpoint_delete(endpoint);
     TEST_ASSERT_TRUE(err == ESP_OK || err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_SIZE);
     TEST_ASSERT_TRUE(text_err == ESP_OK || text_err == ESP_ERR_NOT_FOUND || text_err == ESP_ERR_INVALID_SIZE);
 }

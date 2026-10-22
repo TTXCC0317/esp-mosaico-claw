@@ -1,0 +1,11 @@
+menu "Region Service"
+
+config REGION_SERVICE_GEOIP_URL
+    string "GeoIP country lookup URL"
+    default "https://gspe1-ssl.ls.apple.com/pep/gcc"
+    help
+        Endpoint returning the caller's ISO 3166 country code as plain text.
+        The code is stored as the device region and shared by every service
+        that depends on the serving area.
+
+endmenu

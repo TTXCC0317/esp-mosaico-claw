@@ -8,7 +8,7 @@ idf_component_register(
         "src"
     REQUIRES
         audio_hub
-        trial_provider
+        claw_endpoint
     PRIV_REQUIRES
         esp_websocket_client
         cjson

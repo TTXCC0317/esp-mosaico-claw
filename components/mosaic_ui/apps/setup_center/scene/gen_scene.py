@@ -59,7 +59,8 @@ PAGE_WECHAT = 2
 PAGE_LLM = 3
 PAGE_DONE = 4
 PAGE_INTEGRATIONS = 5
-PAGE_COUNT = 6
+PAGE_REGION = 6
+PAGE_COUNT = 7
 
 FONT_POLICIES = {
     20: auto_charset(), 24: auto_charset(), 30: auto_charset(),
@@ -537,6 +538,30 @@ def build_llm(objs, parent):
                       callback="setup_llm_reconfigure"))
 
 
+def build_region(objs, parent):
+    waiting = len(objs)
+    objs.append(layer(parent, 0, 0, 480, 480,
+                      name="setup_region_waiting",
+                      bind="setup_region_waiting_visible"))
+    objs.append(label(waiting, 24, 212, 432, 56, "Please wait (1/10)",
+                      size=34, align="center",
+                      bind="setup_region_wait_text",
+                      name="setup_region_wait_text"))
+
+    choose = len(objs)
+    objs.append(layer(parent, 0, 0, 480, 480, hidden=True,
+                      name="setup_region_choose",
+                      bind="setup_region_choose_visible"))
+    objs.append(label(choose, 24, 66, 432, 50, "Service Region", size=44))
+    objs.append(label(choose, 24, 122, 432, 32,
+                      "Are you using this device in Chinese Mainland?",
+                      size=24, color=MUTED))
+    primary_button(objs, choose, 214, "Yes",
+                   "setup_region_mainland", secondary=True)
+    primary_button(objs, choose, 322, "No",
+                   "setup_region_international", secondary=True)
+
+
 def build_done(objs, parent):
     success_screen(objs, parent, title="Setup Complete",
                    detail="Your Mosaico is ready",
@@ -573,6 +598,7 @@ def main():
     build_llm(objs, page(objs, stack, PAGE_LLM))
     build_done(objs, page(objs, stack, PAGE_DONE))
     build_integrations(objs, page(objs, stack, PAGE_INTEGRATIONS))
+    build_region(objs, page(objs, stack, PAGE_REGION))
     top_notice(objs, content, name="setup_top_notice",
                title="Connection failed", message="Incorrect password")
     # Canvas needs its own resource view even when placeholders are shared.

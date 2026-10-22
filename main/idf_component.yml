@@ -26,6 +26,12 @@ dependencies:
   trial_provider:
     path: ../components/trial_provider
 
+  claw_endpoint:
+    path: ../third-party/esp-claw/components/claw_modules/claw_endpoint
+
+  region_service:
+    path: ../components/region_service
+
   cap_system:
     path: ../components/cap_system
 
