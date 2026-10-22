@@ -8,7 +8,7 @@ local job, queue = "app_store_worker", "app_store_progress"
 local items, selected, task, confirm = {}, nil, nil, false
 local running, closing, dirty, owned = true, false, true, false
 local tab, notice, percent = 1, "Preparing app catalog", 0
-local screen, body, status, bar, width, height, font
+local screen, body, status, bar, width, height, font, title_font
 local home, list, empty, detail_page, detail_view, active_tab
 local cards, tabs = {}, {}
 local C = { bg = "#0b0b0d", card = "#19191c", text = "#f3f3f5", muted = "#ababb3", accent = "#97ff65", tint = "#26262b", line = "#303036", danger = "#ff7788" }
@@ -58,8 +58,9 @@ local function compact(text, pixels)
     local used, last = 0, 0
     for pos, cp in utf8.codes(text) do
         used = used + (cp < 128 and 10 or 18)
-        if used > pixels - 18 then return text:sub(1, last) .. "…" end
-        last = (utf8.offset(text, 2, pos) or (#text + 1)) - 1
+        if used > pixels then return text:sub(1, last) .. "…" end
+        -- Reserve ellipsis space only if the full text needs truncation.
+        if used <= pixels - 18 then last = (utf8.offset(text, 2, pos) or (#text + 1)) - 1 end
     end
     return text
 end
@@ -122,15 +123,20 @@ local function render_catalog(w, h)
         active_tab = tab
         list = lvgl.object(home, { x = 0, y = 52, w = w, h = h - 52, bg_opa = 0, pad = 0, border_width = 0 })
         list:set_scroll({ dir = "ver", scrollbar = "auto" })
-        empty = label(list, "No apps yet. Tap Refresh.", 0, 12, w, 60, C.muted)
-        empty:add_flag("HIDDEN")
     end
     if active_tab ~= tab then
         tabs[active_tab]:set_style({ border_color = C.line, bg_color = C.card, text_color = C.text })
         tabs[tab]:set_style({ border_color = C.accent, bg_color = C.accent, text_color = C.bg })
+        -- Cleaning resets the old scroll offset and cancels its scroll animation.
+        list:clean()
+        cards, empty = {}, nil
         active_tab = tab
     end
-    -- Keep card objects and the scroll container alive across catalog refreshes.
+    if not empty then
+        empty = label(list, "No apps yet. Tap Refresh.", 0, 12, w, 60, C.muted)
+        empty:add_flag("HIDDEN")
+    end
+    -- Keep card objects and the scroll container alive across same-category refreshes.
     local seen, count = {}, 0
     for _, item in ipairs(items) do
         seen[item.id] = true
@@ -181,12 +187,14 @@ local function render_detail(w, h)
         detail_page:clear_flag("SCROLLABLE")
         local detail = lvgl.object(detail_page, { x = 0, y = 0, w = w, h = h - 52, bg_opa = 0, pad = 0, border_width = 0 })
         detail:set_scroll({ dir = "ver", scrollbar = "auto" })
-        label(detail, compact(item.title, w), 0, 0, w)
+        -- Scale the truncation budget with the larger title font.
+        local title = label(detail, compact(item.title, math.floor((w - 8) * 18 / 28)), 0, 0, w - 8, 36, C.accent)
+        title:set_style({ font = title_font })
         detail_view = { content = detail }
-        detail_view.icon, detail_view.icon_loaded = icon(detail, item, 0, 32)
-        detail_view.state = label(detail, "", 62, 32, w - 62, 24, C.accent)
-        detail_view.size = label(detail, string.format("%.0f KB", (tonumber(item.totalSize) or 0) / 1024), 62, 58, w - 62, 24, C.muted)
-        detail_view.description = label(detail, "", 0, 94, w - 8, 48, C.muted)
+        detail_view.icon, detail_view.icon_loaded = icon(detail, item, 0, 48)
+        detail_view.state = label(detail, "", 62, 48, w - 62, 24, C.accent)
+        detail_view.size = label(detail, string.format("%.0f KB", (tonumber(item.totalSize) or 0) / 1024), 62, 74, w - 62, 24, C.muted)
+        detail_view.description = label(detail, "", 0, 110, w - 8, 48, C.muted)
         local peripherals = (item.metadata or {}).peripherals or {}
         if #peripherals > 0 then detail_view.peripherals = label(detail, "Peripherals: " .. table.concat(peripherals, ", "), 0, 0, w - 8, 72) end
         detail_view.button = button(detail_page, "", 0, h - 44, w, function()
@@ -203,18 +211,18 @@ local function render_detail(w, h)
     local state_text = state or "Available"
     if view.state_text ~= state_text then view.state:set_text(state_text); view.state_text = state_text end
     if not view.icon_loaded and not task and storage.exists(cache .. "/" .. item.id .. ".jpg") then
-        view.icon, view.icon_loaded = icon(view.content, item, 0, 32, view.icon)
+        view.icon, view.icon_loaded = icon(view.content, item, 0, 48, view.icon)
     end
     if view.confirm ~= confirm then
         local description = confirm and "Uninstall this app? App files will be deleted. Tap the button below to confirm." or item.description
         local text_height = math.max(48, math.ceil((utf8.len(description) or #description) / math.max(1, math.floor((w - 8) / 18))) * 24)
         view.description:set_text(tostring(description):gsub("×", "x"))
-        view.description:set_pos(0, confirm and 32 or 94)
+        view.description:set_pos(0, confirm and 48 or 110)
         view.description:set_size(w - 8, text_height)
         for _, obj in ipairs({ view.icon, view.state, view.size, view.peripherals }) do
             if confirm then obj:add_flag("HIDDEN") else obj:clear_flag("HIDDEN") end
         end
-        if view.peripherals then view.peripherals:set_pos(0, 102 + text_height) end
+        if view.peripherals then view.peripherals:set_pos(0, 118 + text_height) end
         view.confirm = confirm
     end
     local protected = state == "Built-in" or item.id == "app_store"
@@ -263,6 +271,7 @@ local function run()
     thread.sync.queue_delete(queue)
     assert(thread.sync.queue_create(queue, { depth = 8, item_size = 512 }))
     font = lvgl.font_load({ size = 18, cache_size = 96 })
+    title_font = lvgl.font_load({ size = 28, cache_size = 48 })
     lvgl.set_default_font(font)
     screen = lvgl.create_screen()
     width, height = screen:get_size()
