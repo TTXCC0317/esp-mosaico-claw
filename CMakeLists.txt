@@ -25,7 +25,7 @@ list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/third-party/esp-claw
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
-project(edge_agent VERSION 0.5.0)
+project(edge_agent VERSION 0.6.0)
 
 if(COMMAND esp_mosaico_build_profile_finalize)
     esp_mosaico_build_profile_finalize()
