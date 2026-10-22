@@ -1148,6 +1148,10 @@ def main():
     # gspc does not silently compile only the placeholder glyphs and render
     # later symbols as '?'.
     for obj in objs:
+        # Disable return transitions, including actions from shared headers.
+        for event in obj.get("events", []):
+            if event.get("action") == "stack_pop" and event.get("target_name") == "settings_stack":
+                event["animated"] = False
         # Canvas needs its own resource view even when placeholders are shared.
         if obj.get("type") == "image" and obj.get("bind", "").endswith("_qr_canvas"):
             obj["canvas"] = "push"

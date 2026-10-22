@@ -1668,7 +1668,7 @@ static void settings_wlan_pop_to_wlan(esp_gsp_handle_t ui)
     /* Each UI path calls this exactly once. StackView queues the command when
      * invoked from an input callback and applies it at the next frame. */
     if (esp_gsp_stack_view_pop(
-            ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
+            ui, GSP_OBJ_KEY_SETTINGS_STACK, false) != ESP_GSP_OK) {
         ESP_LOGW(TAG, "return from WLAN password page failed");
     } else if (s_state.wlan_page_active && s_state.wlan.enabled) {
         settings_wlan_list_attach(ui);
@@ -1716,7 +1716,7 @@ static bool settings_wlan_reconcile_navigation(esp_gsp_handle_t ui)
     if (s_state.wlan_phone_exit_pending &&
             page == SETTINGS_WLAN_PASSWORD_PAGE && !animating) {
         if (esp_gsp_stack_view_pop(
-                ui, GSP_OBJ_KEY_SETTINGS_STACK, true) == ESP_GSP_OK) {
+                ui, GSP_OBJ_KEY_SETTINGS_STACK, false) == ESP_GSP_OK) {
             s_state.wlan_phone_exit_pending = false;
             s_state.wlan_phone_active = false;
             s_state.wlan_phone_operation_id = 0;
@@ -1881,7 +1881,7 @@ static void settings_wlan_complete_phone_setup(esp_gsp_handle_t ui)
      * reconciliation pops the password page after this transition settles. */
     s_state.wlan_phone_exit_pending = true;
     if (esp_gsp_stack_view_pop(
-            ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
+            ui, GSP_OBJ_KEY_SETTINGS_STACK, false) != ESP_GSP_OK) {
         s_state.wlan_phone_exit_pending = false;
         return;
     }
@@ -1973,7 +1973,7 @@ static void settings_wlan_handle_forget(esp_gsp_handle_t ui)
     s_state.snapshot.network.ssid[0] = '\0';
     (void)settings_wlan_render(ui);
     if (esp_gsp_stack_view_pop(
-            ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
+            ui, GSP_OBJ_KEY_SETTINGS_STACK, false) != ESP_GSP_OK) {
         s_state.wlan_forget_pending = false;
     }
 }
@@ -2448,7 +2448,7 @@ static void settings_integrations_pop(esp_gsp_handle_t ui)
 {
     settings_refresh_snapshot(ui);
     settings_root_list_refresh(ui);
-    (void)esp_gsp_stack_view_pop(ui, GSP_OBJ_KEY_SETTINGS_STACK, true);
+    (void)esp_gsp_stack_view_pop(ui, GSP_OBJ_KEY_SETTINGS_STACK, false);
     mosaic_app_shell_set_root_visible(ui, true);
     s_state.integration_page = 0;
 }
@@ -2623,7 +2623,7 @@ static void settings_dispatch_call(
         s_state.wlan_entry_pending = false;
         s_state.wlan_leave_pending = true;
         if (esp_gsp_stack_view_pop(
-                ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
+                ui, GSP_OBJ_KEY_SETTINGS_STACK, false) != ESP_GSP_OK) {
             s_state.wlan_leave_pending = false;
             return;
         }
@@ -2764,7 +2764,7 @@ static void settings_dispatch_call(
         }
         s_state.wlan_detail_leave_pending = true;
         if (esp_gsp_stack_view_pop(
-                ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
+                ui, GSP_OBJ_KEY_SETTINGS_STACK, false) != ESP_GSP_OK) {
             s_state.wlan_detail_leave_pending = false;
         }
         return;
@@ -3246,11 +3246,18 @@ static void settings_event(
 
 static bool settings_back(esp_gsp_handle_t ui, int64_t timestamp_us)
 {
-    (void)ui;
     (void)timestamp_us;
     s_state.integration_page = 0;
-    /* Return false so the loader performs the normal Settings StackView pop. */
-    return false;
+    uint16_t page = 0;
+    if (esp_gsp_stack_view_get_top(ui, GSP_OBJ_KEY_SETTINGS_STACK, &page) != ESP_GSP_OK || page == 0) {
+        return false;
+    }
+    /* Handle child-page Back here to bypass the loader's animated pop. */
+    esp_gsp_err_t err = esp_gsp_stack_view_pop(ui, GSP_OBJ_KEY_SETTINGS_STACK, false);
+    if (err != ESP_GSP_OK) {
+        ESP_LOGW(TAG, "return from Settings page failed: %d", (int)err);
+    }
+    return true;
 }
 
 const mosaic_app_descriptor_t mosaic_settings_app = {
