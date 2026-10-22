@@ -514,15 +514,21 @@ def _build_wlan(objs, page):
                       events=current_events))
     objs.append(container(current_layer, 0, 99, 480, 1, bg="#3B3C3D"))
 
-    # Keep one List and move its owning layer. Dynamic row instances belong to
-    # the List driver, so duplicating the List for two layouts would make the
-    # two instance pools compete for the same row template state.
+    # List viewport sizes are compiled. Give each layout its own template so
+    # its scroll extent matches the visible area without sharing row slots.
+    _wlan_scan_list(objs, list_layer, "settings_wlan_scan", "settings_wlan_row",
+                    y=0, height=304)
+    _wlan_scan_list(objs, list_layer, "settings_wlan_scan_connected",
+                    "settings_wlan_connected_row", y=100, height=204,
+                    hidden=True)
+
+
+def _wlan_scan_list(objs, parent, name, template, *, y, height, hidden=False):
     scan_layer = len(objs)
     objs.append(layer(
-        list_layer,
-        {"default": 0, "min": 0, "max": 1},
-        {"default": 100, "min": 0, "max": 100},
-        CONTENT_W, 346, name="settings_wlan_scan_layer"))
+        parent, 0, y, CONTENT_W, height + 42,
+        name=f"{name}_layer", hidden=hidden,
+        bind=f"{name}_visible", bind_target="visible"))
     objs.append(label(scan_layer, 12, 6, 180, 34, "Network",
                       size=24, color=MUTED))
     objs.append({
@@ -531,10 +537,10 @@ def _build_wlan(objs, page):
         "x": 0,
         "y": 42,
         "w": 480,
-        "h": 304,
+        "h": height,
         "item_height": WLAN_LIST_ITEM_H,
-        "name": "settings_wlan_scan_list",
-        "row_template": "settings_wlan_row",
+        "name": f"{name}_list",
+        "row_template": template,
         "item_count": 0,
         "scroll_snapshot": True,
         "bg_color": BG,
@@ -548,14 +554,14 @@ def _build_wlan(objs, page):
         "y": 0,
         "w": 480,
         "h": WLAN_LIST_ITEM_H,
-        "template": "settings_wlan_row",
+        "template": template,
         "callback": "wlan_network_select",
         "bg_color": BG,
         "radius": 0,
     })
     objs.append(label(
         row_tpl, 12, 29, 320, 42, "ssid1", size=30,
-        name="settings_wlan_row_ssid",
+        name=f"{template}_ssid",
     ))
     objs.append(image(row_tpl, WLAN_LOCK_ICON, 380, 30, 40, 40))
     objs.append(image(row_tpl, WLAN_WIFI_ICON, 428, 30, 40, 40))

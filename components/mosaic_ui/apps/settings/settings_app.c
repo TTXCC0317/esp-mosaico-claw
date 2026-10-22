@@ -193,6 +193,7 @@ typedef struct {
     const char *wlan_notice_message;
     bool wlan_scan_compact;
     bool wlan_scan_compact_valid;
+    bool wlan_list_attached;
     int64_t wlan_toggle_last_us;
     settings_wlan_state_t wlan;
 } settings_ui_state_t;
@@ -201,7 +202,13 @@ static mosaic_settings_wifi_ap_t
     s_wlan_networks[MOSAIC_SETTINGS_WIFI_SCAN_MAX];
 static size_t s_wlan_network_count;
 
-static esp_gsp_list_t s_wlan_list = ESP_GSP_LIST_NONE;
+typedef struct {
+    esp_gsp_list_t handle;
+    size_t total;
+    bool dirty;
+} settings_wlan_list_t;
+
+static settings_wlan_list_t s_wlan_lists[2];
 static esp_gsp_list_t s_root_list = ESP_GSP_LIST_NONE;
 static esp_gsp_list_t s_detail_list = ESP_GSP_LIST_NONE;
 
@@ -1113,19 +1120,91 @@ static bool settings_wlan_show_current(void)
            s_state.wlan.current_ssid[0] != '\0';
 }
 
+static void settings_wlan_lists_reset(void)
+{
+    for (size_t i = 0; i < 2; ++i) {
+        s_wlan_lists[i] = (settings_wlan_list_t) {
+            .handle = ESP_GSP_LIST_NONE,
+            .dirty = true,
+        };
+    }
+    s_state.wlan_list_attached = false;
+}
+
+static esp_gsp_err_t settings_wlan_apply_layout(esp_gsp_handle_t ui)
+{
+    const bool compact = !settings_wlan_show_current();
+    if (s_state.wlan_scan_compact_valid &&
+            s_state.wlan_scan_compact == compact) {
+        return ESP_GSP_OK;
+    }
+    s_state.wlan_scan_compact_valid = false;
+    esp_gsp_err_t err = compact
+        ? gsp_settings_settings_wlan_scan_connected_layer_set_visible(ui, false)
+        : gsp_settings_settings_wlan_scan_layer_set_visible(ui, false);
+    if (err == ESP_GSP_OK) {
+        err = compact
+            ? gsp_settings_settings_wlan_scan_layer_set_visible(ui, true)
+            : gsp_settings_settings_wlan_scan_connected_layer_set_visible(ui, true);
+    }
+    if (err == ESP_GSP_OK) {
+        s_state.wlan_scan_compact = compact;
+        s_state.wlan_scan_compact_valid = true;
+    }
+    return err;
+}
+
 static void settings_wlan_refresh_list(esp_gsp_handle_t ui)
 {
-    if (s_wlan_list == ESP_GSP_LIST_NONE) {
+    if (!s_state.wlan_list_attached) {
         return;
     }
-    esp_gsp_err_t err = esp_gsp_list_set_total(
-        ui, s_wlan_list, s_wlan_network_count);
-    if (err == ESP_GSP_OK) {
-        err = esp_gsp_list_refresh(ui, s_wlan_list);
-    }
+    const size_t active = settings_wlan_show_current() ? 1 : 0;
+    const gsp_component_key_t keys[] = {
+        GSP_OBJ_KEY_SETTINGS_WLAN_SCAN_LIST,
+        GSP_OBJ_KEY_SETTINGS_WLAN_SCAN_CONNECTED_LIST,
+    };
+    settings_wlan_list_t *inactive = &s_wlan_lists[1 - active];
+    settings_wlan_list_t *list = &s_wlan_lists[active];
+    esp_gsp_err_t err = settings_wlan_apply_layout(ui);
     if (err != ESP_GSP_OK) {
-        ESP_LOGW(TAG, "refresh WLAN List failed: 0x%x", (unsigned)err);
+        goto failed;
     }
+    if (inactive->handle != ESP_GSP_LIST_NONE && inactive->total != 0) {
+        err = esp_gsp_list_set_total(ui, inactive->handle, 0);
+        if (err != ESP_GSP_OK) {
+            goto failed;
+        }
+        inactive->total = 0;
+        inactive->dirty = true;
+    }
+    if (list->handle == ESP_GSP_LIST_NONE) {
+        list->handle = esp_gsp_list_bind_component(
+            ui, keys[active], settings_wlan_list_bind_item, NULL);
+        if (list->handle == ESP_GSP_LIST_NONE) {
+            ESP_LOGW(TAG, "bind WLAN scan list failed");
+            return;
+        }
+    }
+    if (list->total != s_wlan_network_count) {
+        err = esp_gsp_list_set_total(ui, list->handle, s_wlan_network_count);
+        if (err != ESP_GSP_OK) {
+            goto failed;
+        }
+        list->total = s_wlan_network_count;
+        list->dirty = true;
+    }
+    if (list->dirty) {
+        err = esp_gsp_list_refresh(ui, list->handle);
+        if (err != ESP_GSP_OK) {
+            goto failed;
+        }
+        list->dirty = false;
+    }
+    return;
+
+failed:
+    ESP_LOGW(TAG, "refresh WLAN List failed: 0x%x", (unsigned)err);
 }
 
 static void settings_wlan_scan(esp_gsp_handle_t ui)
@@ -1157,14 +1236,19 @@ static void settings_wlan_scan(esp_gsp_handle_t ui)
     if (count > MOSAIC_SETTINGS_WIFI_SCAN_MAX) {
         count = MOSAIC_SETTINGS_WIFI_SCAN_MAX;
     }
-    const bool changed = count != s_wlan_network_count ||
-        (count != 0 && memcmp(s_wlan_networks, networks,
-                              count * sizeof(networks[0])) != 0);
+    bool changed = count != s_wlan_network_count;
+    for (size_t i = 0; !changed && i < count; ++i) {
+        changed = strcmp(s_wlan_networks[i].ssid, networks[i].ssid) != 0 ||
+            s_wlan_networks[i].secured != networks[i].secured;
+    }
     if (!changed) {
         return;
     }
     memcpy(s_wlan_networks, networks, count * sizeof(networks[0]));
     s_wlan_network_count = count;
+    for (size_t i = 0; i < 2; ++i) {
+        s_wlan_lists[i].dirty = true;
+    }
     settings_wlan_refresh_list(ui);
 }
 
@@ -1202,15 +1286,7 @@ static void settings_wlan_update_summary(esp_gsp_handle_t ui)
 
 static void settings_wlan_list_attach(esp_gsp_handle_t ui)
 {
-    if (s_wlan_list == ESP_GSP_LIST_NONE) {
-        s_wlan_list = esp_gsp_list_bind_component(
-            ui, GSP_OBJ_KEY_SETTINGS_WLAN_SCAN_LIST,
-            settings_wlan_list_bind_item, NULL);
-    }
-    if (s_wlan_list == ESP_GSP_LIST_NONE) {
-        ESP_LOGW(TAG, "bind WLAN scan list failed");
-        return;
-    }
+    s_state.wlan_list_attached = true;
     if (s_wlan_network_count == 0) {
         settings_wlan_scan(ui);
     }
@@ -1222,9 +1298,19 @@ static void settings_wlan_list_park(esp_gsp_handle_t ui)
     /* Dynamic row instances are owned by the List driver, not by the scene
      * layer that authored the viewport. Emptying the List is the explicit
      * lifecycle boundary that removes rows before the Settings root returns. */
-    if (s_wlan_list != ESP_GSP_LIST_NONE) {
-        (void)esp_gsp_list_set_total(ui, s_wlan_list, 0);
-        (void)esp_gsp_list_refresh(ui, s_wlan_list);
+    s_state.wlan_list_attached = false;
+    for (size_t i = 0; i < 2; ++i) {
+        settings_wlan_list_t *list = &s_wlan_lists[i];
+        if (list->handle == ESP_GSP_LIST_NONE || list->total == 0) {
+            continue;
+        }
+        esp_gsp_err_t err = esp_gsp_list_set_total(ui, list->handle, 0);
+        if (err == ESP_GSP_OK) {
+            list->total = 0;
+            list->dirty = true;
+        } else {
+            ESP_LOGW(TAG, "park WLAN List failed: 0x%x", (unsigned)err);
+        }
     }
 }
 
@@ -1418,15 +1504,7 @@ static esp_err_t settings_wlan_render(esp_gsp_handle_t ui)
     keep_first_error(&result,
         gsp_settings_settings_wlan_current_error_set_visible(
             ui, false));
-    const bool compact = !show_current;
-    if (!s_state.wlan_scan_compact_valid ||
-            s_state.wlan_scan_compact != compact) {
-        keep_first_error(&result, esp_gsp_component_set_position(
-            ui, GSP_OBJ_KEY_SETTINGS_WLAN_SCAN_LAYER,
-            0, compact ? 0 : 100));
-        s_state.wlan_scan_compact = compact;
-        s_state.wlan_scan_compact_valid = true;
-    }
+    keep_first_error(&result, settings_wlan_apply_layout(ui));
     keep_first_error(&result,
         gsp_settings_settings_wlan_current_status_set_text(ui, status));
     if (wlan->current_ssid[0] != '\0') {
@@ -3028,7 +3106,7 @@ static void settings_event(
         s_state.wlan.selected_ssid[0] = '\0';
         s_state.wlan.password[0] = '\0';
         s_root_list = ESP_GSP_LIST_NONE;
-        s_wlan_list = ESP_GSP_LIST_NONE;
+        settings_wlan_lists_reset();
         s_detail_list = ESP_GSP_LIST_NONE;
         s_state.wlan_scan_compact_valid = false;
         s_wlan_network_count = 0;
@@ -3208,7 +3286,7 @@ static void settings_event(
         settings_wlan_password_detach(ui);
         settings_wlan_list_park(ui);
         s_root_list = ESP_GSP_LIST_NONE;
-        s_wlan_list = ESP_GSP_LIST_NONE;
+        settings_wlan_lists_reset();
         s_detail_list = ESP_GSP_LIST_NONE;
         s_state.wlan_scan_compact_valid = false;
         s_state.wlan_notice_pending = false;
@@ -3279,6 +3357,7 @@ const mosaic_app_descriptor_t mosaic_settings_app = {
     .instance_slots =
         GSP_TEMPLATE_SETTINGS_ROOT_ROW_MAX_INSTANCES +
         GSP_TEMPLATE_SETTINGS_WLAN_ROW_MAX_INSTANCES +
+        GSP_TEMPLATE_SETTINGS_WLAN_CONNECTED_ROW_MAX_INSTANCES +
         GSP_TEMPLATE_SETTINGS_DETAIL_ROW_MAX_INSTANCES,
     .dynamic_image_slots =
         GSP_TEMPLATE_SETTINGS_ROOT_ROW_MAX_INSTANCES +

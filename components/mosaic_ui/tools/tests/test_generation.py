@@ -18,6 +18,34 @@ spec.loader.exec_module(builder)
 
 
 class GenerationTests(unittest.TestCase):
+    def test_wlan_layouts_keep_the_last_row_reachable(self):
+        path = builder.UI_ROOT / "apps/settings/scene/gen_scene.py"
+        scene_spec = importlib.util.spec_from_file_location("settings_scene", path)
+        scene = importlib.util.module_from_spec(scene_spec)
+        scene_spec.loader.exec_module(scene)
+        objects = [scene.container(-1, 0, 0, 480, 480)]
+        scene._build_wlan(objects, 0)
+        lists = [obj for obj in objects if obj["type"] == "list"]
+        self.assertEqual(len(lists), 2)
+        self.assertEqual(len({obj["row_template"] for obj in lists}), 2)
+        for viewport in lists:
+            with self.subTest(layout=viewport["name"]):
+                owner = objects[viewport["parent"]]
+                self.assertEqual(owner["bind_target"], "visible")
+                self.assertTrue(owner["bind"])
+                top = 0
+                obj = viewport
+                while True:
+                    top += obj["y"]
+                    if obj["parent"] < 0:
+                        break
+                    obj = objects[obj["parent"]]
+                self.assertEqual(top + viewport["h"], 480)
+                for count in (3, 4, 20):
+                    content = count * viewport["item_height"]
+                    max_offset = max(0, content - viewport["h"])
+                    self.assertLessEqual(top + content - max_offset, 480)
+
     def test_native_arguments_and_asset_scene_resources(self):
         with tempfile.TemporaryDirectory(prefix="mosaic tests ") as directory:
             root = Path(directory)
