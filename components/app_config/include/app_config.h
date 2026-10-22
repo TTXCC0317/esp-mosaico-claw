@@ -27,6 +27,7 @@ typedef struct {
     char ap_behavior[16];
     char llm_api_key[APP_CONFIG_STR_LEN];
     char llm_backend_type[32];
+    char llm_endpoint_provider[32];
     char llm_model[64];
     char llm_base_url[APP_CONFIG_STR_LEN];
     char llm_auth_type[32];
@@ -54,6 +55,7 @@ typedef struct {
     char search_tavily_key[APP_CONFIG_STR_LEN];
     char search_http_allowlist[APP_CONFIG_STR_LEN];
     char asr_provider[32];
+    char asr_endpoint_provider[32];
     char asr_api_key[APP_CONFIG_STR_LEN];
     char asr_workspace_id[APP_CONFIG_STR_LEN];
     char asr_language_hint[32];

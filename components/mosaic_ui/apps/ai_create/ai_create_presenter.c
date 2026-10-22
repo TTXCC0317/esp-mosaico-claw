@@ -239,6 +239,10 @@ static const char *voice_unavailable_copy(ai_create_voice_readiness_t readiness)
         return "Network offline; hold to retry";
     case AI_CREATE_VOICE_READINESS_AUTH_FAILED:
         return "Invalid ASR credentials";
+    case AI_CREATE_VOICE_READINESS_KEY_EXCHANGE_FAILED:
+        return "Key exchange failed; hold to retry";
+    case AI_CREATE_VOICE_READINESS_VERIFY_FAILED:
+        return "Verification failed; hold to retry";
     case AI_CREATE_VOICE_READINESS_AUDIO_ERROR:
         return "Microphone unavailable";
     case AI_CREATE_VOICE_READINESS_BUSY:
@@ -262,6 +266,10 @@ static const char *voice_notice_copy(ai_create_voice_readiness_t readiness)
         return "Cannot connect to the voice service. Check the network and retry.";
     case AI_CREATE_VOICE_READINESS_AUTH_FAILED:
         return "Invalid ASR credentials. Check the speech recognition settings.";
+    case AI_CREATE_VOICE_READINESS_KEY_EXCHANGE_FAILED:
+        return "Key exchange failed: the server refused to issue a voice service key. Try again later.";
+    case AI_CREATE_VOICE_READINESS_VERIFY_FAILED:
+        return "Verification failed: the voice service rejected the new key. Try again later.";
     case AI_CREATE_VOICE_READINESS_AUDIO_ERROR:
         return "The microphone is unavailable. Check the audio device.";
     case AI_CREATE_VOICE_READINESS_BUSY:

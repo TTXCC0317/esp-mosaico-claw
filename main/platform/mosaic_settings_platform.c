@@ -230,6 +230,7 @@ static esp_err_t get_snapshot(
                 sizeof(ret_snapshot->llm.base_url));
         ret_snapshot->llm.api_key_configured =
             snapshot->llm.api_key_configured;
+        ret_snapshot->llm.endpoint_configured = snapshot->llm.endpoint_configured;
         ret_snapshot->llm.supports_tools = snapshot->llm.supports_tools;
         ret_snapshot->llm.supports_vision = snapshot->llm.supports_vision;
     }

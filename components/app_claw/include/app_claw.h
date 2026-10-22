@@ -27,6 +27,7 @@ typedef struct claw_core_state *claw_core_handle_t;
 typedef struct {
     char llm_api_key[APP_CLAW_STR_LEN];
     char llm_backend_type[APP_CLAW_SHORT_STR_LEN];
+    char llm_endpoint_provider[APP_CLAW_SHORT_STR_LEN];
     char llm_model[APP_CLAW_MODEL_LEN];
     char llm_base_url[APP_CLAW_STR_LEN];
     char llm_auth_type[APP_CLAW_SHORT_STR_LEN];
@@ -54,6 +55,7 @@ typedef struct {
     char search_tavily_key[APP_CLAW_STR_LEN];
     char search_http_allowlist[APP_CLAW_STR_LEN];
     char asr_provider[APP_CLAW_SHORT_STR_LEN];
+    char asr_endpoint_provider[APP_CLAW_SHORT_STR_LEN];
     char asr_api_key[APP_CLAW_STR_LEN];
     char asr_workspace_id[APP_CLAW_STR_LEN];
     char asr_language_hint[APP_CLAW_SHORT_STR_LEN];

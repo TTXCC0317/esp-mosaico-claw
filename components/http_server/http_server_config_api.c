@@ -44,6 +44,7 @@ static const config_field_def_t CONFIG_FIELDS[] = {
 
     CONFIG_FIELD("llm",          llm_api_key),
     CONFIG_FIELD("llm",          llm_backend_type),
+    CONFIG_FIELD("llm",          llm_endpoint_provider),
     CONFIG_FIELD("llm",          llm_model),
     CONFIG_FIELD("llm",          llm_base_url),
     CONFIG_FIELD("llm",          llm_auth_type),
@@ -56,6 +57,7 @@ static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("llm",          llm_supports_vision),
     CONFIG_FIELD("llm",          llm_image_remote_url_only),
     CONFIG_FIELD("asr",          asr_provider),
+    CONFIG_FIELD("asr",          asr_endpoint_provider),
     CONFIG_FIELD("asr",          asr_api_key),
     CONFIG_FIELD("asr",          asr_workspace_id),
     CONFIG_FIELD("asr",          asr_language_hint),
