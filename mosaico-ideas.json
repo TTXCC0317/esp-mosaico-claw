@@ -1,0 +1,23 @@
+{
+  "schema": "mosaico-ideas/project-release/1",
+  "project": {
+    "title": "ESP-MOSAICO-CLAW",
+    "categories": ["communication", "display", "audio"]
+  },
+  "website": {"readme": "README.md"},
+  "device": {
+    "default_locale": "zh-CN",
+    "presentations": {
+      "zh-CN": {
+        "name": "Mosaico 智能助手",
+        "description": "支持语音交互、相机和触屏应用。",
+        "font": "fatfs_image/system/fonts/NotoSansSC-Regular-sub.ttf"
+      },
+      "en": {
+        "name": "Mosaico Claw",
+        "description": "AI assistant with voice, camera and touchscreen apps.",
+        "font": "components/mosaic_ui/common/fonts/NotoSans-Regular.ttf"
+      }
+    }
+  }
+}
