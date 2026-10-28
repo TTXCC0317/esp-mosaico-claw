@@ -4,11 +4,12 @@ dependencies:
     version: "^0.6"
     public: true
 
-  # Pin 0.0.9: 1.0.0 (cached 2026-10-28 on dependency re-solve) breaks SC101IOT
-  # sensor register writes over SCCB -> sensor outputs no frames -> camera
-  # preview black screen. 0.0.9 is what the working v0.5.0 build used.
+  # Pin 1.0.0: has I3C additions only; I2C core unchanged from 0.0.9 so
+  # SC101IOT (uses I2C SCCB) is unaffected. Previously pinned 0.0.9 during
+  # 0.6.0 merge root-cause triage — that was a false positive; the actual
+  # black-screen root cause was esp-gsp 1.8.0 auto-callback-invalidate removal.
   espressif/esp_sccb_intf:
-    version: "==0.0.9"
+    version: "==1.0.0"
     public: true
 
   app_claw:
