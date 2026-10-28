@@ -4,6 +4,13 @@ dependencies:
     version: "^0.6"
     public: true
 
+  # Pin 0.0.9: 1.0.0 (cached 2026-10-28 on dependency re-solve) breaks SC101IOT
+  # sensor register writes over SCCB -> sensor outputs no frames -> camera
+  # preview black screen. 0.0.9 is what the working v0.5.0 build used.
+  espressif/esp_sccb_intf:
+    version: "==0.0.9"
+    public: true
+
   app_claw:
     path: ../components/app_claw
 
