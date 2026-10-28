@@ -1,4 +1,4 @@
-## IDF Component Manager Manifest File
+﻿## IDF Component Manager Manifest File
 dependencies:
   espressif/esp_board_manager:
     version: "^0.6"
@@ -10,6 +10,15 @@ dependencies:
   # black-screen root cause was esp-gsp 1.8.0 auto-callback-invalidate removal.
   espressif/esp_sccb_intf:
     version: "==1.0.0"
+    public: true
+
+  # Pin 2.4.0: esp_cam_sensor 2.6.0 INVERTED the SC101IOT PWDN polarity.
+  # 2.4.0 power_on: pwdn=1 -> 10ms -> pwdn=0 (ends powered ON, pin active-high)
+  # 2.6.0 power_on: pwdn=1 only  (treats PWDN as active-low) => mosaico hardware
+  # stays in power-down => sensor outputs no frames => camera black screen.
+  # Do NOT bump past 2.4.x without patching sensors/sc101iot/sc101iot.c PWDN logic.
+  espressif/esp_cam_sensor:
+    version: "==2.4.0"
     public: true
 
   app_claw:
