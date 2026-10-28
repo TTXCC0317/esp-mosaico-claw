@@ -6,6 +6,6 @@ sysmeta,   data, nvs,     0xc000,   0x14000
 vibe_mode, app,  test,    0x20000,  0x1c0000
 coredump,  data, coredump,0x1e0000, 0x20000
 nvs,       data, nvs,     0x200000, 0x6000
-main_app,  app,  ota_0,   0x210000, 7808K
-ui_apps,   data, 0x41,    0x9b0000, 3264K
-system,    data, littlefs,0xce0000, 3200K
+main_app,  app,  ota_0,   0x210000, 8000K
+ui_apps,   data, 0x41,    0x9e0000, 3200K
+system,    data, littlefs,0xd00000, 3000K

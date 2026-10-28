@@ -6,6 +6,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS "../../../src"
     REQUIRES
         cjson
+        claw_endpoint
         esp_event
         esp_netif
         esp_websocket_client

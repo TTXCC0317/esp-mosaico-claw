@@ -9,4 +9,6 @@ idf_component_register(
         display_service
         settings
         wifi_manager
+    PRIV_REQUIRES
+        claw_endpoint
 )

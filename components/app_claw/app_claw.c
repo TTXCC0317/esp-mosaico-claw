@@ -639,6 +639,7 @@ static esp_err_t init_memory(const app_claw_config_t *config, const app_claw_sto
         .llm = {
             .api_key = config->llm_api_key,
             .backend_type = config->llm_backend_type,
+            .endpoint_provider = config->llm_endpoint_provider,
             .model = config->llm_model,
             .base_url = config->llm_base_url,
             .auth_type = config->llm_auth_type,
@@ -730,6 +731,7 @@ static void app_claw_fill_core_config(const app_claw_config_t *config, claw_core
     memset(core_config, 0, sizeof(*core_config));
     core_config->api_key = config->llm_api_key;
     core_config->backend_type = config->llm_backend_type;
+    core_config->endpoint_provider = config->llm_endpoint_provider;
     core_config->model = config->llm_model;
     core_config->base_url = config->llm_base_url;
     core_config->auth_type = config->llm_auth_type;

@@ -270,12 +270,17 @@ def build_clock_face(objs, parent):
     card_w = 454
     objs.append(container(
         parent, card_x, card_y, card_w, 209, bg='#242425', radius=40,
-        name='clock_card', callback='app_weather',
+        name='clock_card',
     ))
 
     # Match the runtime's unavailable state on the very first frame. Live
     # weather replaces these placeholders without a sample-data flash.
     weather_x = card_x + 21
+    # Dynamic text binds skip label hit regions; use a weather-only target.
+    objs.append(container(
+        parent, weather_x, card_y + 33, 205, 167, bg='#242425',
+        name='home_weather_target', callback='app_weather',
+    ))
     objs.append(label(
         parent, weather_x, card_y + 33, 205, 98, '--',
         size=HOME_TEMP_SIZE, color='#FCFCFF', name='home_weather_temp',

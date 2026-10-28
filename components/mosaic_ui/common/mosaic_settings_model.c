@@ -16,6 +16,5 @@ bool mosaic_settings_llm_is_configured(
         return false;
     }
 
-    return snapshot->llm.api_key_configured ||
-           strcmp(snapshot->llm.backend, "trial") == 0;
+    return snapshot->llm.endpoint_configured;
 }

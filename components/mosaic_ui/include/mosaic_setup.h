@@ -59,6 +59,20 @@ typedef struct {
     void *user_ctx;
 } mosaic_setup_wechat_ops_t;
 
+typedef enum {
+    MOSAIC_SETUP_REGION_UNKNOWN = 0,
+    MOSAIC_SETUP_REGION_MAINLAND,
+    MOSAIC_SETUP_REGION_INTERNATIONAL,
+} mosaic_setup_region_t;
+
+typedef struct {
+    /** Start background region detection lasting at most timeout_ms. */
+    esp_err_t (*detect)(void *user_ctx, uint32_t timeout_ms);
+    /** Persist the region the user picked after detection failed. */
+    esp_err_t (*select)(void *user_ctx, mosaic_setup_region_t region);
+    void *user_ctx;
+} mosaic_setup_region_ops_t;
+
 typedef esp_err_t (*mosaic_setup_app_request_cb_t)(
     void *user_ctx, const char *app_name);
 
@@ -84,6 +98,13 @@ esp_err_t mosaic_setup_configure_wechat(
 /** Thread-safe status publication; rendering remains on the UI task. */
 esp_err_t mosaic_setup_set_wechat_status(
     const mosaic_setup_wechat_status_t *status);
+
+/** Connect onboarding to the platform's region service. */
+esp_err_t mosaic_setup_configure_region(
+    const mosaic_setup_region_ops_t *ops);
+
+/** Thread-safe publication of the current device region. */
+esp_err_t mosaic_setup_set_region(mosaic_setup_region_t region);
 
 /** Snapshot the shared platform binding port without exposing Setup UI state.
  * Settings owns its own page/state machine and may consume this service. */

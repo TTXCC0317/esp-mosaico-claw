@@ -29,7 +29,6 @@
 #include "mosaic_settings.h"
 #include "mosaic_system.h"
 #include "mosaic_ui.h"
-#include "update_check_service.h"
 #include "weather_service.h"
 #include "esp_wifi.h"
 #include "wifi_manager.h"
@@ -103,16 +102,7 @@ static esp_err_t s_scan_error = ESP_ERR_NOT_FINISHED;
 static portMUX_TYPE s_wifi_state_lock = portMUX_INITIALIZER_UNLOCKED;
 static mosaic_settings_network_t s_wifi_state_cache;
 static bool s_wifi_state_valid;
-static uint32_t s_update_revision;
 static void invalidate_settings_app(uint32_t revision);
-
-static void update_check_event_cb(
-    const update_check_snapshot_t *snapshot, void *user_ctx)
-{
-    (void)snapshot;
-    (void)user_ctx;
-    invalidate_settings_app(++s_update_revision);
-}
 
 static void copy_scan_status(mosaic_settings_network_t *network)
 {
@@ -297,34 +287,14 @@ static esp_err_t get_snapshot(
                 sizeof(ret_snapshot->llm.base_url));
         ret_snapshot->llm.api_key_configured =
             snapshot->llm.api_key_configured;
+        ret_snapshot->llm.endpoint_configured = snapshot->llm.endpoint_configured;
         ret_snapshot->llm.supports_tools = snapshot->llm.supports_tools;
         ret_snapshot->llm.supports_vision = snapshot->llm.supports_vision;
     }
 
     (void)mosaic_battery_platform_get(&ret_snapshot->battery);
-    update_check_snapshot_t update = {0};
-    if (update_check_service_get_snapshot(&update) == ESP_OK) {
-        ret_snapshot->update.state =
-            (mosaic_settings_update_state_t)update.state;
-        strlcpy(ret_snapshot->update.latest_version, update.latest_version,
-                sizeof(ret_snapshot->update.latest_version));
-        strlcpy(ret_snapshot->update.title, update.title,
-                sizeof(ret_snapshot->update.title));
-        strlcpy(ret_snapshot->update.summary, update.summary,
-                sizeof(ret_snapshot->update.summary));
-        strlcpy(ret_snapshot->update.published_at, update.published_at,
-                sizeof(ret_snapshot->update.published_at));
-        ret_snapshot->update.sequence = update.sequence;
-        ret_snapshot->update.last_error = update.last_error;
-    }
     free(snapshot);
     return err;
-}
-
-static esp_err_t request_update_check(void *user_ctx)
-{
-    (void)user_ctx;
-    return update_check_service_request();
 }
 
 static esp_err_t get_battery(
@@ -858,7 +828,6 @@ esp_err_t mosaic_settings_platform_init(
         .set_language = set_language,
         .set_weather_city = set_weather_city,
         .factory_reset = factory_reset,
-        .request_update_check = request_update_check,
         .set_wifi_enabled = set_wifi_enabled,
         .get_battery = get_battery,
         .get_wifi_status = get_wifi_status,
@@ -870,9 +839,6 @@ esp_err_t mosaic_settings_platform_init(
         .request_network_reconfigure = request_network_reconfigure,
         .user_ctx = config->settings,
     }), TAG, "configure settings ops");
-    ESP_RETURN_ON_ERROR(update_check_service_subscribe(
-                            update_check_event_cb, NULL),
-                        TAG, "subscribe to update checker");
     /* Seed Wi-Fi cache so Hub status bar has a value before the first event. */
     mosaic_settings_network_t wifi = {0};
     if (get_wifi_status(config->settings, &wifi) == ESP_OK) {

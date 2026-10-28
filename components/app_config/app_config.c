@@ -34,10 +34,11 @@ typedef struct {
     { nvs_key, default_literal, offsetof(app_config_t, member), sizeof(((app_config_t *)0)->member) }
 
 #define APP_DEFAULT_LLM_API_KEY              ""
-#define APP_DEFAULT_LLM_BACKEND_TYPE         "trial"
+#define APP_DEFAULT_LLM_BACKEND_TYPE         "openai_compatible"
+#define APP_DEFAULT_LLM_ENDPOINT_PROVIDER    "trial"
 #define APP_DEFAULT_LLM_MODEL                "device-chat"
-#define APP_DEFAULT_LLM_BASE_URL             "https://mosaico-asr.espressif.com.cn"
-#define APP_DEFAULT_LLM_AUTH_TYPE            "trial"
+#define APP_DEFAULT_LLM_BASE_URL             ""
+#define APP_DEFAULT_LLM_AUTH_TYPE            ""
 #define APP_DEFAULT_LLM_TIMEOUT_MS           "120000"
 #define APP_DEFAULT_LLM_MAX_TOKENS           "8192"
 #define APP_DEFAULT_LLM_DEFAULT_IMAGE_MAX_BYTES "524288"
@@ -60,12 +61,13 @@ typedef struct {
 #define APP_DEFAULT_SEARCH_PROVIDER          "tavily"
 #define APP_DEFAULT_SEARCH_BOCHA_KEY         ""
 #define APP_DEFAULT_SEARCH_TAVILY_KEY        ""
-#define APP_DEFAULT_ASR_PROVIDER             "trial"
+#define APP_DEFAULT_ASR_PROVIDER             "qwen"
+#define APP_DEFAULT_ASR_ENDPOINT_PROVIDER    "trial"
 #define APP_DEFAULT_ASR_API_KEY              ""
 #define APP_DEFAULT_ASR_WORKSPACE_ID         ""
 #define APP_DEFAULT_ASR_LANGUAGE_HINT        "zh"
 #define APP_DEFAULT_ASR_MODEL                "device-asr"
-#define APP_DEFAULT_ASR_ENDPOINT             "wss://mosaico-asr.espressif.com.cn/v1/asr/realtime"
+#define APP_DEFAULT_ASR_ENDPOINT             ""
 #define APP_DEFAULT_ENABLED_CAP_GROUPS       ""
 #define APP_DEFAULT_LLM_VISIBLE_CAP_GROUPS   ""
 #define APP_DEFAULT_ENABLED_LUA_MODULES      ""
@@ -81,6 +83,7 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(ap_behavior, "ap_behavior", "close_on_sta"),
     APP_CONFIG_FIELD(llm_api_key, "llm_api_key", APP_DEFAULT_LLM_API_KEY),
     APP_CONFIG_FIELD(llm_backend_type, "llm_backend", APP_DEFAULT_LLM_BACKEND_TYPE),
+    APP_CONFIG_FIELD(llm_endpoint_provider, "llm_endpoint", APP_DEFAULT_LLM_ENDPOINT_PROVIDER),
     APP_CONFIG_FIELD(llm_model, "llm_model", APP_DEFAULT_LLM_MODEL),
     APP_CONFIG_FIELD(llm_base_url, "llm_base_url", APP_DEFAULT_LLM_BASE_URL),
     APP_CONFIG_FIELD(llm_auth_type, "llm_auth_type", APP_DEFAULT_LLM_AUTH_TYPE),
@@ -108,6 +111,7 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(search_tavily_key, "tavily_key", APP_DEFAULT_SEARCH_TAVILY_KEY),
     APP_CONFIG_FIELD(search_http_allowlist, "http_allow_ls", APP_SEARCH_HTTP_ALLOWLIST),
     APP_CONFIG_FIELD(asr_provider, "asr_provider", APP_DEFAULT_ASR_PROVIDER),
+    APP_CONFIG_FIELD(asr_endpoint_provider, "asr_endpoint_p", APP_DEFAULT_ASR_ENDPOINT_PROVIDER),
     APP_CONFIG_FIELD(asr_api_key, "asr_api_key", APP_DEFAULT_ASR_API_KEY),
     APP_CONFIG_FIELD(asr_workspace_id, "asr_workspace", APP_DEFAULT_ASR_WORKSPACE_ID),
     APP_CONFIG_FIELD(asr_language_hint, "asr_language", APP_DEFAULT_ASR_LANGUAGE_HINT),
@@ -182,7 +186,7 @@ static const app_config_legacy_llm_preset_t s_legacy_llm_presets[] = {
         .legacy_id = "anthropic",
         .backend_type = "anthropic_compatible",
         .base_url = "https://api.anthropic.com/v1",
-        .auth_type = "none",
+        .auth_type = "api-key",
         .max_tokens_field = "max_tokens",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
@@ -193,7 +197,7 @@ static const app_config_legacy_llm_preset_t s_legacy_llm_presets[] = {
         .legacy_id = "claude",
         .backend_type = "anthropic_compatible",
         .base_url = "https://api.anthropic.com/v1",
-        .auth_type = "none",
+        .auth_type = "api-key",
         .max_tokens_field = "max_tokens",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
@@ -431,6 +435,70 @@ static esp_err_t app_config_upgrade_legacy_llm_settings(void)
     return ESP_OK;
 }
 
+static esp_err_t app_config_upgrade_endpoint_settings(void)
+{
+    bool migrated = false;
+    esp_err_t err = settings_store_has_key("llm_endpoint", &migrated);
+    if (err != ESP_OK) return err;
+    if (!migrated) {
+        char backend[32];
+        char auth[32];
+        char provider[32];
+        err = settings_store_get_string("llm_backend", backend, sizeof(backend), "trial");
+        if (err != ESP_OK) return err;
+        err = settings_store_get_string("llm_auth_type", auth, sizeof(auth), "");
+        if (err != ESP_OK) return err;
+        /* Persist the selected provider before rewriting legacy fields, so an
+         * interrupted migration can resume without losing the original choice. */
+        err = settings_store_get_string("llm_ep_mig", provider, sizeof(provider), "");
+        if (err != ESP_OK) return err;
+        if (!provider[0]) {
+            strlcpy(provider, strcmp(backend, "trial") == 0 || strcmp(auth, "trial") == 0
+                    ? "trial" : "static", sizeof(provider));
+            err = settings_store_set_string("llm_ep_mig", provider);
+            if (err != ESP_OK) return err;
+        }
+        if (strcmp(provider, "trial") == 0) {
+            if (strcmp(backend, "trial") == 0) {
+                err = settings_store_set_string("llm_backend", "openai_compatible");
+                if (err != ESP_OK) return err;
+            }
+            err = settings_store_set_string("llm_auth_type", "");
+            if (err != ESP_OK) return err;
+        } else if (strcmp(backend, "anthropic_compatible") == 0 &&
+                   (!auth[0] || strcmp(auth, "none") == 0)) {
+            err = settings_store_set_string("llm_auth_type", "api-key");
+            if (err != ESP_OK) return err;
+        }
+        err = settings_store_set_string("llm_endpoint", provider);
+        if (err != ESP_OK) return err;
+    }
+    err = settings_store_erase_key("llm_ep_mig");
+    if (err != ESP_OK) return err;
+    err = settings_store_has_key("asr_endpoint_p", &migrated);
+    if (err != ESP_OK) return err;
+    if (!migrated) {
+        char protocol[32];
+        char provider[32];
+        err = settings_store_get_string("asr_provider", protocol, sizeof(protocol), "trial");
+        if (err != ESP_OK) return err;
+        err = settings_store_get_string("asr_ep_mig", provider, sizeof(provider), "");
+        if (err != ESP_OK) return err;
+        if (!provider[0]) {
+            strlcpy(provider, strcmp(protocol, "trial") == 0 ? "trial" : "static", sizeof(provider));
+            err = settings_store_set_string("asr_ep_mig", provider);
+            if (err != ESP_OK) return err;
+        }
+        if (strcmp(protocol, "trial") == 0) {
+            err = settings_store_set_string("asr_provider", "qwen");
+            if (err != ESP_OK) return err;
+        }
+        err = settings_store_set_string("asr_endpoint_p", provider);
+        if (err != ESP_OK) return err;
+    }
+    return settings_store_erase_key("asr_ep_mig");
+}
+
 esp_err_t app_config_init(void)
 {
     esp_err_t err = settings_store_init(&(settings_store_config_t) {
@@ -439,7 +507,8 @@ esp_err_t app_config_init(void)
     if (err != ESP_OK) {
         return err;
     }
-    return app_config_upgrade_legacy_llm_settings();
+    err = app_config_upgrade_legacy_llm_settings();
+    return err == ESP_OK ? app_config_upgrade_endpoint_settings() : err;
 }
 
 void app_config_load_defaults(app_config_t *config)
@@ -592,6 +661,7 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
 
     strlcpy(out->llm_api_key, config->llm_api_key, sizeof(out->llm_api_key));
     strlcpy(out->llm_backend_type, config->llm_backend_type, sizeof(out->llm_backend_type));
+    strlcpy(out->llm_endpoint_provider, config->llm_endpoint_provider, sizeof(out->llm_endpoint_provider));
     strlcpy(out->llm_model, config->llm_model, sizeof(out->llm_model));
     strlcpy(out->llm_base_url, config->llm_base_url, sizeof(out->llm_base_url));
     strlcpy(out->llm_auth_type, config->llm_auth_type, sizeof(out->llm_auth_type));
@@ -625,6 +695,7 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
             config->search_http_allowlist,
             sizeof(out->search_http_allowlist));
     strlcpy(out->asr_provider, config->asr_provider, sizeof(out->asr_provider));
+    strlcpy(out->asr_endpoint_provider, config->asr_endpoint_provider, sizeof(out->asr_endpoint_provider));
     strlcpy(out->asr_api_key, config->asr_api_key, sizeof(out->asr_api_key));
     strlcpy(out->asr_workspace_id, config->asr_workspace_id,
             sizeof(out->asr_workspace_id));

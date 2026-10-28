@@ -26,6 +26,12 @@ dependencies:
   trial_provider:
     path: ../components/trial_provider
 
+  claw_endpoint:
+    path: ../third-party/esp-claw/components/claw_modules/claw_endpoint
+
+  region_service:
+    path: ../components/region_service
+
   cap_system:
     path: ../components/cap_system
 
@@ -63,11 +69,6 @@ dependencies:
     rules:
     - if: $CONFIG{APP_CLAW_MOSAIC_GSP_ENABLE} == True
     path: ../components/weather_service
-
-  update_check_service:
-    rules:
-    - if: $CONFIG{APP_CLAW_MOSAIC_GSP_ENABLE} == True
-    path: ../components/update_check_service
 
   wechat_binding_service:
     rules:

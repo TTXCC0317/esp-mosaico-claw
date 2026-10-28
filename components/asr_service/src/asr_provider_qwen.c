@@ -10,7 +10,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
@@ -21,7 +20,6 @@
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "trial_auth.h"
 
 static const char *TAG = "asr_qwen";
 
@@ -41,11 +39,16 @@ static const char *TAG = "asr_qwen";
 #define ASR_QWEN_SHORT_STR_LEN         32
 #define ASR_QWEN_TASK_ID_LEN           37
 #define ASR_QWEN_USER_AGENT            "esp-claw-asr-service"
+#define ASR_QWEN_CONNECT_ATTEMPTS      2
+#define ASR_QWEN_HTTP_UNAUTHORIZED     401
+#define ASR_QWEN_STARTUP_POLL_MS       50U
 
 typedef struct {
-    char api_key[ASR_QWEN_STR_LEN];
+    claw_endpoint_handle_t endpoint;
+    bool (*is_cancelled)(void *ctx);
+    void *cancel_ctx;
+    claw_endpoint_request_t startup_request;
     char workspace_id[ASR_QWEN_STR_LEN];
-    char endpoint[ASR_QWEN_STR_LEN];
     char model[ASR_QWEN_MODEL_LEN];
     char language_hint[ASR_QWEN_SHORT_STR_LEN];
     uint32_t connect_timeout_ms;
@@ -56,7 +59,6 @@ typedef struct {
     SemaphoreHandle_t result_lock;
     asr_provider_result_cb_t result_cb;
     void *result_user_ctx;
-    char *auth_header;
     char task_id[ASR_QWEN_TASK_ID_LEN];
     char *rx_text_buf;
     size_t rx_text_cap;
@@ -68,61 +70,11 @@ typedef struct {
     volatile bool finish_sent;
     volatile bool have_final;
     volatile esp_err_t remote_error;
-    bool trial_auth;
+    volatile bool auth_rejected;
 } asr_qwen_t;
 
 static void qwen_disconnect(asr_provider_handle_t handle);
 static void qwen_delete(asr_provider_handle_t handle);
-
-static bool has_bearer_prefix(const char *token)
-{
-    static const char *prefix = "Bearer ";
-    return token && strncasecmp(token, prefix, strlen(prefix)) == 0;
-}
-
-static char *dup_auth_header(const char *api_key)
-{
-    static const char *prefix = "Bearer ";
-    if (!api_key) {
-        return NULL;
-    }
-    if (has_bearer_prefix(api_key)) {
-        size_t len = strlen(api_key) + 1;
-        char *copy = malloc(len);
-        if (copy) {
-            memcpy(copy, api_key, len);
-        }
-        return copy;
-    }
-
-    size_t len = strlen(prefix) + strlen(api_key) + 1;
-    char *header = malloc(len);
-    if (!header) {
-        return NULL;
-    }
-    snprintf(header, len, "%s%s", prefix, api_key);
-    return header;
-}
-
-static esp_err_t refresh_trial_auth(asr_qwen_t *qwen, bool force_refresh)
-{
-    if (!qwen || !qwen->trial_auth) {
-        return ESP_OK;
-    }
-    char *token = NULL;
-    esp_err_t err = trial_auth_get_asr_token(force_refresh, &token);
-    if (err != ESP_OK) {
-        return err;
-    }
-    char *header = dup_auth_header(token);
-    free(token);
-    if (!header) {
-        return ESP_ERR_NO_MEM;
-    }
-    free(qwen->auth_header);
-    qwen->auth_header = header;
-    return ESP_OK;
-}
 
 static esp_err_t copy_required_string(char *dst, size_t dst_size, const char *src, const char *name)
 {
@@ -247,7 +199,8 @@ static void generate_task_id(asr_qwen_t *qwen)
              (unsigned int)(c & 0xFFFF), (unsigned int)((c >> 16) & 0xFFFF), (unsigned int)d);
 }
 
-static esp_err_t send_text_locked(asr_qwen_t *qwen, const char *json)
+static esp_err_t send_text_locked(asr_qwen_t *qwen, const char *json,
+                                   const claw_endpoint_request_t *request)
 {
     if (!qwen || !json) {
         ESP_LOGE(TAG, "text send args are invalid");
@@ -258,10 +211,26 @@ static esp_err_t send_text_locked(asr_qwen_t *qwen, const char *json)
         return ESP_ERR_INVALID_STATE;
     }
 
-    TickType_t timeout = pdMS_TO_TICKS(qwen->send_timeout_ms);
+    uint32_t timeout_ms = qwen->send_timeout_ms;
+    if (request) {
+        esp_err_t err = claw_endpoint_request_check(request);
+        if (err != ESP_OK) return err;
+        uint32_t remaining = claw_endpoint_request_remaining_ms(request);
+        if (remaining < timeout_ms) timeout_ms = remaining;
+    }
+    TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
     if (xSemaphoreTake(qwen->send_lock, timeout) != pdTRUE) {
         ESP_LOGE(TAG, "websocket text send lock timeout");
         return ESP_ERR_TIMEOUT;
+    }
+    if (request) {
+        esp_err_t err = claw_endpoint_request_check(request);
+        if (err != ESP_OK) {
+            xSemaphoreGive(qwen->send_lock);
+            return err;
+        }
+        uint32_t remaining = claw_endpoint_request_remaining_ms(request);
+        if (remaining < timeout_ms) timeout = pdMS_TO_TICKS(remaining);
     }
     int sent = esp_websocket_client_send_text(qwen->ws, json, (int)strlen(json), timeout);
     xSemaphoreGive(qwen->send_lock);
@@ -272,14 +241,15 @@ static esp_err_t send_text_locked(asr_qwen_t *qwen, const char *json)
     return ESP_OK;
 }
 
-static esp_err_t send_json(asr_qwen_t *qwen, cJSON *root)
+static esp_err_t send_json(asr_qwen_t *qwen, cJSON *root,
+                            const claw_endpoint_request_t *request)
 {
     char *json = cJSON_PrintUnformatted(root);
     if (!json) {
         ESP_LOGE(TAG, "json render failed");
         return ESP_ERR_NO_MEM;
     }
-    esp_err_t err = send_text_locked(qwen, json);
+    esp_err_t err = send_text_locked(qwen, json, request);
     cJSON_free(json);
     return err;
 }
@@ -329,7 +299,7 @@ static esp_err_t send_run_task(asr_qwen_t *qwen)
 
     esp_err_t err = add_language_hints(qwen, parameters);
     if (err == ESP_OK) {
-        err = send_json(qwen, root);
+        err = send_json(qwen, root, &qwen->startup_request);
     }
     cJSON_Delete(root);
     return err;
@@ -356,7 +326,7 @@ static esp_err_t send_finish_task(asr_qwen_t *qwen)
         return ESP_ERR_NO_MEM;
     }
 
-    esp_err_t err = send_json(qwen, root);
+    esp_err_t err = send_json(qwen, root, NULL);
     cJSON_Delete(root);
     if (err == ESP_OK) {
         qwen->finish_sent = true;
@@ -514,6 +484,9 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
         break;
     case WEBSOCKET_EVENT_ERROR:
         qwen->remote_error = ESP_FAIL;
+        if (data && data->error_handle.esp_ws_handshake_status_code == ASR_QWEN_HTTP_UNAUTHORIZED) {
+            qwen->auth_rejected = true;
+        }
         xEventGroupSetBits(qwen->events, ASR_QWEN_TASK_FAILED_BIT);
         ESP_LOGE(TAG, "websocket error");
         break;
@@ -529,6 +502,10 @@ static esp_err_t qwen_create(const asr_provider_config_t *config, asr_provider_h
         return ESP_ERR_INVALID_ARG;
     }
     *ret_handle = NULL;
+    if (!config->endpoint) {
+        ESP_LOGE(TAG, "endpoint is unavailable");
+        return ESP_ERR_INVALID_ARG;
+    }
 
     asr_qwen_t *qwen = calloc(1, sizeof(*qwen));
     if (!qwen) {
@@ -536,11 +513,7 @@ static esp_err_t qwen_create(const asr_provider_config_t *config, asr_provider_h
         return ESP_ERR_NO_MEM;
     }
 
-    esp_err_t err = config->trial_auth
-                        ? copy_optional_string(qwen->api_key, sizeof(qwen->api_key), config->api_key, "api_key")
-                        : copy_required_string(qwen->api_key, sizeof(qwen->api_key), config->api_key, "api_key");
-    if (err == ESP_OK) err = copy_required_string(qwen->endpoint, sizeof(qwen->endpoint), config->endpoint, "endpoint");
-    if (err == ESP_OK) err = copy_required_string(qwen->model, sizeof(qwen->model), config->model, "model");
+    esp_err_t err = copy_required_string(qwen->model, sizeof(qwen->model), config->model, "model");
     if (err == ESP_OK) err = copy_optional_string(qwen->workspace_id, sizeof(qwen->workspace_id), config->workspace_id, "workspace_id");
     if (err == ESP_OK) err = copy_optional_string(qwen->language_hint, sizeof(qwen->language_hint), config->language_hint, "language_hint");
     if (err != ESP_OK) {
@@ -548,17 +521,17 @@ static esp_err_t qwen_create(const asr_provider_config_t *config, asr_provider_h
         return err;
     }
 
+    qwen->endpoint = config->endpoint;
+    qwen->is_cancelled = config->is_cancelled;
+    qwen->cancel_ctx = config->cancel_ctx;
     qwen->connect_timeout_ms = config->connect_timeout_ms;
     qwen->send_timeout_ms = config->send_timeout_ms;
-    qwen->trial_auth = config->trial_auth;
     qwen->result_cb = config->result_cb;
     qwen->result_user_ctx = config->result_user_ctx;
-    qwen->auth_header = qwen->trial_auth ? NULL : dup_auth_header(qwen->api_key);
     qwen->events = xEventGroupCreate();
     qwen->send_lock = xSemaphoreCreateMutex();
     qwen->result_lock = xSemaphoreCreateMutex();
-    if ((!qwen->trial_auth && !qwen->auth_header) || !qwen->events ||
-            !qwen->send_lock || !qwen->result_lock) {
+    if (!qwen->events || !qwen->send_lock || !qwen->result_lock) {
         ESP_LOGE(TAG, "provider runtime alloc failed");
         qwen_delete(qwen);
         return ESP_ERR_NO_MEM;
@@ -568,17 +541,21 @@ static esp_err_t qwen_create(const asr_provider_config_t *config, asr_provider_h
     return ESP_OK;
 }
 
-static esp_err_t qwen_connect_once(asr_provider_handle_t handle)
+static esp_err_t wait_startup(asr_qwen_t *qwen, EventBits_t mask, EventBits_t *out_bits)
 {
-    asr_qwen_t *qwen = (asr_qwen_t *)handle;
-    if (!qwen) {
-        ESP_LOGE(TAG, "connect handle is invalid");
-        return ESP_ERR_INVALID_ARG;
+    for (;;) {
+        esp_err_t err = claw_endpoint_request_check(&qwen->startup_request);
+        if (err != ESP_OK) return err;
+        uint32_t remaining = claw_endpoint_request_remaining_ms(&qwen->startup_request);
+        uint32_t wait_ms = remaining < ASR_QWEN_STARTUP_POLL_MS ? remaining : ASR_QWEN_STARTUP_POLL_MS;
+        TickType_t ticks = pdMS_TO_TICKS(wait_ms);
+        *out_bits = xEventGroupWaitBits(qwen->events, mask, pdTRUE, pdFALSE, ticks ? ticks : 1);
+        if (*out_bits & mask) return claw_endpoint_request_check(&qwen->startup_request);
     }
-    if (qwen->connected) {
-        return ESP_OK;
-    }
+}
 
+static esp_err_t qwen_connect_once(asr_qwen_t *qwen, const claw_endpoint_resolved_t *resolved)
+{
     if (qwen->ws) {
         esp_websocket_client_destroy(qwen->ws);
         qwen->ws = NULL;
@@ -588,13 +565,18 @@ static esp_err_t qwen_connect_once(asr_provider_handle_t handle)
     qwen->task_started = false;
     qwen->task_running = false;
     qwen->finish_sent = false;
+    qwen->auth_rejected = false;
     xEventGroupClearBits(qwen->events, ASR_QWEN_CONNECTED_BIT | ASR_QWEN_DISCONNECTED_BIT | ASR_QWEN_TASK_STARTED_BIT |
                                        ASR_QWEN_TASK_FINISHED_BIT | ASR_QWEN_TASK_FAILED_BIT);
 
+    esp_err_t check = claw_endpoint_request_check(&qwen->startup_request);
+    if (check != ESP_OK) return check;
+    uint32_t remaining = claw_endpoint_request_remaining_ms(&qwen->startup_request);
+    if (!remaining) return ESP_ERR_TIMEOUT;
     esp_websocket_client_config_t ws_config = {
-        .uri = qwen->endpoint,
+        .uri = resolved->url,
         .buffer_size = ASR_QWEN_WS_BUFFER_SIZE,
-        .network_timeout_ms = ASR_QWEN_NETWORK_TIMEOUT_MS,
+        .network_timeout_ms = remaining < ASR_QWEN_NETWORK_TIMEOUT_MS ? remaining : ASR_QWEN_NETWORK_TIMEOUT_MS,
         .reconnect_timeout_ms = ASR_QWEN_RECONNECT_TIMEOUT_MS,
         .task_prio = ASR_QWEN_WS_TASK_PRIO,
         .crt_bundle_attach = esp_crt_bundle_attach,
@@ -612,17 +594,12 @@ static esp_err_t qwen_connect_once(asr_provider_handle_t handle)
         ESP_LOGE(TAG, "websocket event register failed: %s", esp_err_to_name(err));
         return err;
     }
-    err = esp_websocket_client_append_header(qwen->ws, "Authorization", qwen->auth_header);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "websocket auth header failed: %s", esp_err_to_name(err));
-        return err;
-    }
-    if (qwen->trial_auth) {
-        err = esp_websocket_client_append_header(qwen->ws,
-                                                 TRIAL_AUTH_FIRMWARE_VERSION_HEADER,
-                                                 trial_auth_get_firmware_version());
+    for (size_t i = 0; i < resolved->header_count; i++) {
+        err = esp_websocket_client_append_header(qwen->ws, resolved->headers[i].name,
+                                                 resolved->headers[i].value);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "websocket firmware version header failed: %s", esp_err_to_name(err));
+            ESP_LOGE(TAG, "websocket %s header failed: %s", resolved->headers[i].name,
+                     esp_err_to_name(err));
             return err;
         }
     }
@@ -639,8 +616,9 @@ static esp_err_t qwen_connect_once(asr_provider_handle_t handle)
         return err;
     }
 
-    EventBits_t bits = xEventGroupWaitBits(qwen->events, ASR_QWEN_CONNECTED_BIT | ASR_QWEN_DISCONNECTED_BIT | ASR_QWEN_TASK_FAILED_BIT,
-                                           pdTRUE, pdFALSE, pdMS_TO_TICKS(qwen->connect_timeout_ms));
+    EventBits_t bits = 0;
+    err = wait_startup(qwen, ASR_QWEN_CONNECTED_BIT | ASR_QWEN_DISCONNECTED_BIT | ASR_QWEN_TASK_FAILED_BIT, &bits);
+    if (err != ESP_OK) return err;
     if (bits & ASR_QWEN_CONNECTED_BIT) {
         return ESP_OK;
     }
@@ -656,24 +634,50 @@ static esp_err_t qwen_connect(asr_provider_handle_t handle)
 {
     asr_qwen_t *qwen = (asr_qwen_t *)handle;
     if (!qwen) {
+        ESP_LOGE(TAG, "connect handle is invalid");
         return ESP_ERR_INVALID_ARG;
     }
-    for (int attempt = 0; attempt < (qwen->trial_auth ? 2 : 1); ++attempt) {
-        esp_err_t auth_err = refresh_trial_auth(qwen, attempt > 0);
-        if (auth_err != ESP_OK) {
-            return auth_err;
-        }
-        esp_err_t err = qwen_connect_once(handle);
-        if (err == ESP_OK || !qwen->trial_auth) {
+    claw_endpoint_request_init(&qwen->startup_request, qwen->connect_timeout_ms,
+                                qwen->is_cancelled, qwen->cancel_ctx);
+    if (qwen->connected) {
+        return ESP_OK;
+    }
+
+    for (int attempt = 0; attempt < ASR_QWEN_CONNECT_ATTEMPTS; ++attempt) {
+        claw_endpoint_resolved_t resolved = {0};
+        esp_err_t err = claw_endpoint_acquire(qwen->endpoint, &qwen->startup_request, &resolved);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "endpoint unavailable: %s", claw_endpoint_err_to_name(err));
             return err;
         }
+        err = qwen_connect_once(qwen, &resolved);
+        if (err == CLAW_ENDPOINT_ERR_CANCELLED || err == ESP_ERR_TIMEOUT) {
+            claw_endpoint_resolved_free(&resolved);
+            return err;
+        }
+        bool retry = false;
+        if (err == ESP_OK) {
+            (void)claw_endpoint_report(qwen->endpoint, &resolved, CLAW_ENDPOINT_OUTCOME_ACCEPTED);
+        } else if (qwen->auth_rejected) {
+            retry = claw_endpoint_report(qwen->endpoint, &resolved, CLAW_ENDPOINT_OUTCOME_REJECTED);
+        }
+        claw_endpoint_resolved_free(&resolved);
+        if (err == ESP_OK || !qwen->auth_rejected) {
+            return err;
+        }
+
         if (qwen->ws) {
             esp_websocket_client_stop(qwen->ws);
             esp_websocket_client_destroy(qwen->ws);
             qwen->ws = NULL;
         }
+        if (!retry) {
+            break;
+        }
+        ESP_LOGW(TAG, "websocket credentials rejected, retrying once with new credentials");
     }
-    return ESP_FAIL;
+    ESP_LOGE(TAG, "websocket credentials rejected");
+    return CLAW_ENDPOINT_ERR_CREDENTIAL_REJECTED;
 }
 
 static esp_err_t qwen_start_stream(asr_provider_handle_t handle)
@@ -705,8 +709,9 @@ static esp_err_t qwen_start_stream(asr_provider_handle_t handle)
         return err;
     }
 
-    EventBits_t bits = xEventGroupWaitBits(qwen->events, ASR_QWEN_TASK_STARTED_BIT | ASR_QWEN_TASK_FAILED_BIT | ASR_QWEN_DISCONNECTED_BIT,
-                                           pdTRUE, pdFALSE, pdMS_TO_TICKS(qwen->connect_timeout_ms));
+    EventBits_t bits = 0;
+    err = wait_startup(qwen, ASR_QWEN_TASK_STARTED_BIT | ASR_QWEN_TASK_FAILED_BIT | ASR_QWEN_DISCONNECTED_BIT, &bits);
+    if (err != ESP_OK) return err;
     if (bits & ASR_QWEN_TASK_STARTED_BIT) {
         return ESP_OK;
     }
@@ -869,7 +874,6 @@ static void qwen_delete(asr_provider_handle_t handle)
         return;
     }
     qwen_disconnect(qwen);
-    free(qwen->auth_header);
     free(qwen->final_text);
     if (qwen->send_lock) {
         vSemaphoreDelete(qwen->send_lock);
@@ -896,11 +900,6 @@ static const asr_provider_ops_t s_qwen_ops = {
 };
 
 const asr_provider_ops_t *asr_provider_qwen_ops(void)
-{
-    return &s_qwen_ops;
-}
-
-const asr_provider_ops_t *asr_provider_trial_ops(void)
 {
     return &s_qwen_ops;
 }

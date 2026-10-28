@@ -58,9 +58,8 @@ PAGE_INTEGRATIONS_MODEL = 9
 PAGE_INTEGRATIONS_CHANNELS = 10
 PAGE_SOUND = 11
 PAGE_SECURITY = 12
-PAGE_UPDATE = 13
-PAGE_DEBUG = 14
-PAGE_COUNT = 15
+PAGE_DEBUG = 13
+PAGE_COUNT = 14
 STACK_CAPACITY = 8
 
 # Mock scan results for the settings WLAN list (prototype SYS_NETWORKS + extras).
@@ -573,15 +572,21 @@ def _build_wlan(objs, page):
                       events=current_events))
     objs.append(container(current_layer, 0, 99, 480, 1, bg="#3B3C3D"))
 
-    # Keep one List and move its owning layer. Dynamic row instances belong to
-    # the List driver, so duplicating the List for two layouts would make the
-    # two instance pools compete for the same row template state.
+    # List viewport sizes are compiled. Give each layout its own template so
+    # its scroll extent matches the visible area without sharing row slots.
+    _wlan_scan_list(objs, list_layer, "settings_wlan_scan", "settings_wlan_row",
+                    y=0, height=304)
+    _wlan_scan_list(objs, list_layer, "settings_wlan_scan_connected",
+                    "settings_wlan_connected_row", y=100, height=204,
+                    hidden=True)
+
+
+def _wlan_scan_list(objs, parent, name, template, *, y, height, hidden=False):
     scan_layer = len(objs)
     objs.append(layer(
-        list_layer,
-        {"default": 0, "min": 0, "max": 1},
-        {"default": 100, "min": 0, "max": 100},
-        CONTENT_W, 346, name="settings_wlan_scan_layer"))
+        parent, 0, y, CONTENT_W, height + 42,
+        name=f"{name}_layer", hidden=hidden,
+        bind=f"{name}_visible", bind_target="visible"))
     objs.append(label(scan_layer, 12, 6, 180, 34, "Network",
                       size=24, color=MUTED))
     objs.append({
@@ -590,10 +595,10 @@ def _build_wlan(objs, page):
         "x": 0,
         "y": 42,
         "w": 480,
-        "h": 304,
+        "h": height,
         "item_height": WLAN_LIST_ITEM_H,
-        "name": "settings_wlan_scan_list",
-        "row_template": "settings_wlan_row",
+        "name": f"{name}_list",
+        "row_template": template,
         "item_count": 0,
         "scroll_snapshot": True,
         "bg_color": BG,
@@ -607,14 +612,14 @@ def _build_wlan(objs, page):
         "y": 0,
         "w": 480,
         "h": WLAN_LIST_ITEM_H,
-        "template": "settings_wlan_row",
+        "template": template,
         "callback": "wlan_network_select",
         "bg_color": BG,
         "radius": 0,
     })
     objs.append(label(
         row_tpl, 12, 29, 320, 42, "ssid1", size=30,
-        name="settings_wlan_row_ssid",
+        name=f"{template}_ssid",
     ))
     objs.append(image(row_tpl, WLAN_LOCK_ICON, 380, 30, 40, 40))
     objs.append(image(row_tpl, WLAN_WIFI_ICON, 428, 30, 40, 40))
@@ -1082,8 +1087,8 @@ def _build_detail(objs, page):
         "callback": "settings_detail_row",
         "bg_color": BG, "radius": 0,
     })
-    # About uses compact left-side labels (Software / Update), leaving the
-    # wider right column free for versions and check-result status text.
+    # About uses compact left-side labels (Software / Serial), leaving the
+    # wider right column free for versions and serial numbers.
     title = label(row, 12, 27, 180, 46, "Model", size=32,
                   name="settings_detail_row_title", i18n=False)
     title["dynamic_color"] = True
@@ -1101,157 +1106,6 @@ def _build_detail(objs, page):
     chevron["font_charset"] = SETTINGS_RUNTIME_CHARSET
     objs.append(chevron)
     objs.append(container(row, 0, 99, 480, 1, bg="#3B3C3D"))
-
-
-def _build_update(objs, page):
-    back_events = [{"event": "click", "action": "call",
-                    "target_name": "settings_update_leave"}]
-    objs.append(button(page, 0, 0, 96, 64, "", bg=BG, radius=0,
-                       name="nav_software_update", events=back_events))
-    back = label(page, 12, 0, 48, 64, "‹", size=48, color=MUTED,
-                 align="center", name="settings_update_back",
-                 events=back_events)
-    back["bind"] = "settings_update_back"
-    back["font_charset"] = SETTINGS_RUNTIME_CHARSET
-    objs.append(back)
-    nav_title = label(page, 0, 0, 480, 64, "Software Update", size=24,
-                      color=MUTED, align="center",
-                      name="settings_update_nav_title")
-    nav_title["bind"] = "settings_update_nav_title"
-    nav_title["font_charset"] = SETTINGS_RUNTIME_CHARSET
-    objs.append(nav_title)
-
-    status_card = len(objs)
-    card = container(page, 16, 76, 448, 96, bg=CARD, radius=20,
-                     border="#29292B", border_w=1)
-    card["bind"] = "settings_update_status_card_color"
-    card["bind_target"] = "color"
-    objs.append(card)
-    objs.append(container(status_card, 0, 0, 4, 96,
-                          bg=ACCENT, radius=2))
-    objs.append(container(status_card, 16, 24, 48, 48,
-                          bg="#2A1810", radius=24,
-                          border=ACCENT, border_w=1))
-    status_icon = label(status_card, 16, 24, 48, 48, "i", size=24,
-                        color=ACCENT, align="center",
-                        name="settings_update_status_icon")
-    status_icon["bind"] = "settings_update_status_icon"
-    status_icon["font_charset"] = SETTINGS_RUNTIME_CHARSET
-    objs.append(status_icon)
-    status = label(status_card, 78, 10, 350, 32, "Ready to Check", size=24,
-                   color=FG, name="settings_update_status")
-    status["bind"] = "settings_update_status"
-    status["overflow"] = "ellipsis"
-    objs.append(status)
-    status_detail = label(status_card, 78, 43, 350, 21,
-                          "Compare with the published release", size=16,
-                          color=MUTED, name="settings_update_status_detail")
-    status_detail["bind"] = "settings_update_status_detail"
-    status_detail["overflow"] = "ellipsis"
-    objs.append(status_detail)
-    status_detail_2 = label(status_card, 78, 65, 350, 21, "", size=16,
-                            color=MUTED,
-                            name="settings_update_status_detail_2")
-    status_detail_2["bind"] = "settings_update_status_detail_2"
-    status_detail_2["overflow"] = "ellipsis"
-    objs.append(status_detail_2)
-
-    heading = label(page, 20, 184, 240, 22, "ABOUT UPDATE CHECKS", size=16,
-                    color=MUTED, name="settings_update_heading")
-    heading["bind"] = "settings_update_heading"
-    heading["font_charset"] = SETTINGS_RUNTIME_CHARSET
-    heading["overflow"] = "ellipsis"
-    objs.append(heading)
-    published_layer = len(objs)
-    objs.append(layer(page, 250, 184, 210, 22, hidden=True,
-                      name="settings_update_published_layer",
-                      bind="settings_update_published_visible"))
-    published = label(published_layer, 0, 0, 210, 22, "2026-08-21", size=16,
-                      color=MUTED, align="right",
-                      name="settings_update_published_at")
-    published["bind"] = "settings_update_published_at"
-    published["overflow"] = "ellipsis"
-    objs.append(published)
-
-    # Keep version comparison compact and visually part of the release notes
-    # rather than presenting it as a second large status card.
-    version_row = len(objs)
-    objs.append(container(page, 16, 210, 448, 38, bg=BG, radius=0))
-    current_label = label(version_row, 4, 8, 72, 22, "CURRENT", size=16,
-                          color=MUTED, name="settings_update_current_label")
-    current_label["bind"] = "settings_update_current_label"
-    current_label["font_charset"] = SETTINGS_RUNTIME_CHARSET
-    objs.append(current_label)
-    current = label(version_row, 84, 5, 86, 28, "0.0.0", size=20,
-                    name="settings_update_current_version")
-    current["bind"] = "settings_update_current_version"
-    current["overflow"] = "ellipsis"
-    objs.append(current)
-    arrow = label(version_row, 174, 5, 34, 28, ">", size=20,
-                  color=ACCENT, align="center", name="settings_update_arrow")
-    arrow["bind"] = "settings_update_arrow"
-    arrow["font_charset"] = SETTINGS_RUNTIME_CHARSET
-    objs.append(arrow)
-    latest_label = label(version_row, 214, 8, 96, 22, "PUBLISHED", size=16,
-                         color=MUTED,
-                         name="settings_update_latest_label")
-    latest_label["bind"] = "settings_update_latest_label"
-    latest_label["font_charset"] = SETTINGS_RUNTIME_CHARSET
-    objs.append(latest_label)
-    latest = label(version_row, 316, 5, 128, 28, "Unavailable", size=20,
-                   name="settings_update_latest_version")
-    latest["bind"] = "settings_update_latest_version"
-    latest["overflow"] = "ellipsis"
-    objs.append(latest)
-
-    objs.append({
-        "type": "list", "parent": page,
-        "x": 16, "y": 252, "w": 448, "h": 140,
-        "name": "settings_update_notes_list",
-        "item_height": 28,
-        "item_count": 1,
-        "row_template": "settings_update_note_row",
-        "scroll_snapshot": True,
-        "snap_to_item": False,
-        "bg_color": BG,
-        "fg_color": FG,
-    })
-    note_row = len(objs)
-    objs.append({
-        "type": "container", "parent": -1,
-        "x": 0, "y": 0, "w": 448, "h": 28,
-        "template": "settings_update_note_row",
-        "bg_color": BG, "radius": 0,
-    })
-    note_text = label(note_row, 4, 1, 440, 26,
-                      "Release information only", size=18,
-                      name="settings_update_note_row_text", i18n=False)
-    note_text["dynamic_color"] = True
-    note_text["font_charset"] = SETTINGS_RUNTIME_CHARSET
-    objs.append(note_text)
-
-    disclaimer = label(page, 20, 398, 440, 18,
-                       "Information only · No automatic installation",
-                       size=16, color=MUTED, align="center",
-                       name="settings_update_disclaimer")
-    disclaimer["bind"] = "settings_update_disclaimer"
-    disclaimer["font_charset"] = SETTINGS_RUNTIME_CHARSET
-    disclaimer["overflow"] = "ellipsis"
-    objs.append(disclaimer)
-
-    check_events = [{"event": "click", "action": "call",
-                     "target_name": "settings_update_check"}]
-    check_button = button(page, 20, 416, 440, 46, "", bg=CARD, radius=16,
-                          border=ACCENT, border_w=1, events=check_events)
-    check_button["bind"] = "settings_update_action_card_color"
-    check_button["bind_target"] = "color"
-    objs.append(check_button)
-    action = label(page, 20, 416, 440, 46, "Check Again", size=20,
-                   color=ACCENT, align="center", name="settings_update_action",
-                   events=check_events)
-    action["bind"] = "settings_update_action"
-    action["overflow"] = "ellipsis"
-    objs.append(action)
 
 
 def _build_factory(objs, page):
@@ -1334,8 +1188,6 @@ def build_settings_ui(objs, content):
     _build_sound(objs, page)
     page = _page(objs, stack, PAGE_SECURITY)
     _build_security(objs, page)
-    page = _page(objs, stack, PAGE_UPDATE)
-    _build_update(objs, page)
     page = _page(objs, stack, PAGE_DEBUG)
     _build_debug(objs, page)
 
@@ -1368,6 +1220,10 @@ def main():
     # gspc does not silently compile only the placeholder glyphs and render
     # later symbols as '?'.
     for obj in objs:
+        # Disable return transitions, including actions from shared headers.
+        for event in obj.get("events", []):
+            if event.get("action") == "stack_pop" and event.get("target_name") == "settings_stack":
+                event["animated"] = False
         # Canvas needs its own resource view even when placeholders are shared.
         if obj.get("type") == "image" and obj.get("bind", "").endswith("_qr_canvas"):
             obj["canvas"] = "push"

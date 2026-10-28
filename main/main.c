@@ -28,7 +28,6 @@
 #include "mosaic_ui.h"
 #include "mosaic_button_platform.h"
 #include "weather_service.h"
-#include "update_check_service.h"
 #if CONFIG_ESP_BOARD_ESP_MOSAICO
 #include "mosaic_imu_platform.h"
 #endif
@@ -57,7 +56,9 @@
 #endif
 #include "app_config.h"
 #include "mosaic_i18n.h"
-#include "trial_auth.h"
+#include "claw_endpoint.h"
+#include "region_service.h"
+#include "trial_provider.h"
 #include "cap_system_platform.h"
 #include "mosaic_settings_platform.h"
 #if CONFIG_ESP_BOARD_ESP_MOSAICO
@@ -71,8 +72,8 @@
 #define APP_ENABLE_CLAW_TASKS     (1)
 #define APP_WEATHER_USER_AGENT \
     "esp-mosaico-claw/1.0 https://github.com/espressif/esp-claw"
-#define APP_UPDATE_USER_AGENT "esp-mosaico-claw/update-check"
 #define APP_ASR_PREBUFFER_MS   3000U
+#define APP_REGION_REFRESH_TIMEOUT_MS 30000U
 
 static const char *TAG = "app";
 
@@ -80,6 +81,7 @@ static claw_hw_registry_handle_t s_hw_registry;
 static EXT_RAM_BSS_ATTR app_config_t *s_config;
 static EXT_RAM_BSS_ATTR app_claw_config_t *s_claw_config;
 static EXT_RAM_BSS_ATTR app_settings_service_handle_t s_app_settings;
+static region_service_handle_t s_region_service;
 #if CONFIG_APP_CLAW_MOSAIC_GSP_ENABLE
 static EXT_RAM_BSS_ATTR network_provisioning_service_handle_t s_network_provisioning;
 static EXT_RAM_BSS_ATTR wechat_binding_service_handle_t s_wechat_binding;
@@ -101,6 +103,11 @@ ASSERT_WECHAT_STATE_MATCH(CANCELLED);
 ASSERT_WECHAT_STATE_MATCH(EXPIRED);
 ASSERT_WECHAT_STATE_MATCH(ERROR);
 #undef ASSERT_WECHAT_STATE_MATCH
+
+_Static_assert((int)REGION_SERVICE_AREA_UNKNOWN == (int)MOSAIC_SETUP_REGION_UNKNOWN &&
+               (int)REGION_SERVICE_AREA_MAINLAND == (int)MOSAIC_SETUP_REGION_MAINLAND &&
+               (int)REGION_SERVICE_AREA_INTERNATIONAL == (int)MOSAIC_SETUP_REGION_INTERNATIONAL,
+               "Setup Center region mismatch");
 
 static esp_err_t main_register_ai_create_capability(
     const app_claw_config_t *config,
@@ -169,6 +176,7 @@ static bool main_asr_config_changed(
 {
     return before == NULL || after == NULL ||
            strcmp(before->asr_provider, after->asr_provider) != 0 ||
+           strcmp(before->asr_endpoint_provider, after->asr_endpoint_provider) != 0 ||
            strcmp(before->asr_api_key, after->asr_api_key) != 0 ||
            strcmp(before->asr_workspace_id, after->asr_workspace_id) != 0 ||
            strcmp(before->asr_language_hint, after->asr_language_hint) != 0 ||
@@ -203,17 +211,22 @@ static esp_err_t main_apply_asr_config(const app_config_t *config)
     asr_service_handle_t replacement = NULL;
     audio_capture_handle_t capture = NULL;
     esp_err_t err;
-    const bool trial_provider = config->asr_provider[0] &&
-                                strcmp(config->asr_provider, "trial") == 0;
+    const char *endpoint_provider = config->asr_endpoint_provider;
+    const char *endpoint = config->asr_endpoint[0] ? config->asr_endpoint
+                                                   : ASR_SERVICE_DEFAULT_ENDPOINT;
 
-    if (!trial_provider && !config->asr_api_key[0]) {
-        err = main_set_asr_unavailable(
-            AI_CREATE_VOICE_READINESS_DISABLED, ESP_ERR_NOT_SUPPORTED);
-    } else if (config->asr_provider[0] &&
-               !trial_provider && strcmp(config->asr_provider, "qwen") != 0) {
+    if (config->asr_provider[0] &&
+            strcmp(config->asr_provider, "qwen") != 0) {
         err = main_set_asr_unavailable(
             AI_CREATE_VOICE_READINESS_PROVIDER_ERROR,
             ESP_ERR_NOT_SUPPORTED);
+    } else if (!claw_endpoint_is_configured(endpoint_provider, &(claw_endpoint_config_t) {
+                   .service = CLAW_ENDPOINT_SERVICE_ASR,
+                   .base_url = endpoint,
+                   .api_key = config->asr_api_key,
+               })) {
+        err = main_set_asr_unavailable(
+            AI_CREATE_VOICE_READINESS_DISABLED, ESP_ERR_NOT_SUPPORTED);
     } else if (audio_hub_get_capture(&capture) != ESP_OK || capture == NULL) {
         err = main_set_asr_unavailable(
             AI_CREATE_VOICE_READINESS_AUDIO_ERROR,
@@ -221,14 +234,12 @@ static esp_err_t main_apply_asr_config(const app_config_t *config)
     } else {
         err = asr_service_create(&(asr_service_config_t) {
             .capture = capture,
-            .provider = trial_provider ? ASR_SERVICE_PROVIDER_TRIAL
-                                       : ASR_SERVICE_PROVIDER_QWEN,
+            .provider = ASR_SERVICE_PROVIDER_QWEN,
+            .endpoint_provider = endpoint_provider,
             .api_key = config->asr_api_key,
             .workspace_id = config->asr_workspace_id[0]
                                 ? config->asr_workspace_id : NULL,
-            .endpoint = config->asr_endpoint[0]
-                            ? config->asr_endpoint
-                            : ASR_SERVICE_DEFAULT_ENDPOINT,
+            .endpoint = endpoint,
             .model = config->asr_model[0]
                          ? config->asr_model : ASR_SERVICE_DEFAULT_MODEL,
             .language_hint = config->asr_language_hint[0]
@@ -305,6 +316,19 @@ static void log_wifi_startup_config(const app_config_t *config)
              config->ap_behavior[0] ? config->ap_behavior : "keep");
 }
 
+/* Refresh the stored region once per boot; a changed result takes effect
+ * for every region-aware service on its next request. */
+static void main_refresh_region_once(bool connected)
+{
+    static bool s_refresh_requested;
+
+    if (!connected || s_refresh_requested) {
+        return;
+    }
+    s_refresh_requested =
+        region_service_detect(s_region_service, APP_REGION_REFRESH_TIMEOUT_MS) == ESP_OK;
+}
+
 static bool main_network_ready(void *user_ctx)
 {
     wifi_manager_status_t status = {0};
@@ -321,9 +345,9 @@ static void on_network_provisioning_changed(
     void *user_ctx)
 {
     (void)service;
-    (void)status;
     (void)user_ctx;
 
+    main_refresh_region_once(status->sta_connected);
     // ESP_LOGI(TAG, "Wi-Fi state: sta_connected=%d ap_active=%d mode=%s ap_ssid=%s",
     //          status->sta_connected,
     //          status->ap_active,
@@ -372,11 +396,33 @@ static esp_err_t device_setup_cancel_wechat(void *user_ctx)
     return wechat_binding_service_cancel(s_wechat_binding);
 }
 
+static void on_region_changed(region_service_handle_t service,
+                              const region_service_status_t *status,
+                              void *user_ctx)
+{
+    (void)service;
+    (void)user_ctx;
+    (void)mosaic_setup_set_region((mosaic_setup_region_t)status->area);
+}
+
+static esp_err_t device_setup_detect_region(void *user_ctx, uint32_t timeout_ms)
+{
+    (void)user_ctx;
+    return region_service_detect(s_region_service, timeout_ms);
+}
+
+static esp_err_t device_setup_select_region(void *user_ctx, mosaic_setup_region_t region)
+{
+    (void)user_ctx;
+    return region_service_select_area(s_region_service, (region_service_area_t)region);
+}
+
 #else
 static void on_wifi_state_changed(bool connected, void *user_ctx)
 {
     (void)user_ctx;
 
+    main_refresh_region_once(connected);
     wifi_manager_status_t status = {0};
     wifi_manager_get_status(&status);
     const char *ap_ssid = status.ap_active ? status.ap_ssid : NULL;
@@ -492,6 +538,7 @@ static void main_copy_claw_to_app_config(const app_claw_config_t *src, app_confi
 {
     strlcpy(dst->llm_api_key, src->llm_api_key, sizeof(dst->llm_api_key));
     strlcpy(dst->llm_backend_type, src->llm_backend_type, sizeof(dst->llm_backend_type));
+    strlcpy(dst->llm_endpoint_provider, src->llm_endpoint_provider, sizeof(dst->llm_endpoint_provider));
     strlcpy(dst->llm_model, src->llm_model, sizeof(dst->llm_model));
     strlcpy(dst->llm_base_url, src->llm_base_url, sizeof(dst->llm_base_url));
     strlcpy(dst->llm_auth_type, src->llm_auth_type, sizeof(dst->llm_auth_type));
@@ -916,9 +963,16 @@ void app_main(void)
     ESP_ERROR_CHECK(app_claw_hw_bridge_init(s_hw_registry));
 #if CONFIG_ESP_BOARD_ESP_MOSAICO
     ESP_ERROR_CHECK(mosaico_bsp_bmgr_init());
-    ESP_ERROR_CHECK(trial_auth_validate_hmac_efuse_key());
+    ESP_ERROR_CHECK(trial_provider_validate_hmac_efuse_key());
 #endif
-    ESP_ERROR_CHECK(trial_auth_init());
+    ESP_ERROR_CHECK(region_service_create(
+        &(region_service_config_t) {
+            .geoip_url = CONFIG_REGION_SERVICE_GEOIP_URL,
+        },
+        &s_region_service));
+    ESP_ERROR_CHECK(trial_provider_init(&(trial_provider_config_t) {
+        .region_service = s_region_service,
+    }));
     ESP_ERROR_CHECK(esp_board_manager_init());
     ESP_ERROR_CHECK(main_install_touch_mux());
 #if !CONFIG_APP_CLAW_MOSAIC_GSP_ENABLE
@@ -933,6 +987,7 @@ void app_main(void)
          * until every operation succeeds so an interrupted reset is retried. */
         ESP_ERROR_CHECK(app_fs_factory_reset());
         ESP_ERROR_CHECK(weather_service_erase_cache());
+        ESP_ERROR_CHECK(region_service_reset(s_region_service));
         ESP_ERROR_CHECK(app_factory_reset_complete());
         ESP_LOGW(TAG, "Factory data reset complete");
     }
@@ -956,15 +1011,6 @@ void app_main(void)
     /* Honour a manual weather city before the worker performs its first
      * refresh; -1/empty keeps IP-based detection. */
     mosaic_settings_platform_apply_weather_city();
-    ESP_ERROR_CHECK(update_check_service_init(
-        &(update_check_service_config_t) {
-            .manifest_url = CONFIG_APP_UPDATE_MANIFEST_URL,
-            .product = "esp-mosaico",
-            .current_version = edge_agent_get_version(),
-            .user_agent = APP_UPDATE_USER_AGENT,
-            .timeout_ms = 10000U,
-            .max_body_size = 4096U,
-        }));
     if (APP_ENABLE_CLAW_TASKS) {
         ESP_ERROR_CHECK(network_provisioning_service_create(
             &s_network_provisioning));
@@ -995,6 +1041,15 @@ void app_main(void)
             s_wechat_binding, &setup_wechat));
         on_device_setup_wechat(s_wechat_binding, &setup_wechat, NULL);
     }
+    ESP_ERROR_CHECK(mosaic_setup_configure_region(
+        &(mosaic_setup_region_ops_t) {
+            .detect = device_setup_detect_region,
+            .select = device_setup_select_region,
+        }));
+    ESP_ERROR_CHECK(region_service_register_cb(s_region_service, on_region_changed, NULL));
+    region_service_status_t region_status;
+    ESP_ERROR_CHECK(region_service_get_status(s_region_service, &region_status));
+    on_region_changed(s_region_service, &region_status, NULL);
     ESP_ERROR_CHECK(mosaic_settings_platform_init(
         &(mosaic_settings_platform_config_t) {
             .settings = s_app_settings,

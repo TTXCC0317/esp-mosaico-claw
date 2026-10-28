@@ -54,8 +54,7 @@
 #define SETTINGS_SOUND_PAGE 11
 #define SETTINGS_ABOUT_PAGE 2
 #define SETTINGS_SECURITY_PAGE 12
-#define SETTINGS_UPDATE_PAGE 13
-#define SETTINGS_DEBUG_PAGE 14
+#define SETTINGS_DEBUG_PAGE 13
 #define SETTINGS_DETAIL_PAGE 7
 #define SETTINGS_FACTORY_PAGE 8
 #define SETTINGS_FACTORY_HOLD_US INT64_C(3000000)
@@ -88,10 +87,6 @@
 #define SETTINGS_WLAN_PHONE_QR_SIZE 184U
 #define SETTINGS_WLAN_PASSWORD_MIN 8
 #define SETTINGS_NOTICE_DURATION_MS 3200U
-#define SETTINGS_UPDATE_NOTICE_DURATION_MS 8000U
-#define SETTINGS_UPDATE_NOTE_MAX_ROWS 12U
-#define SETTINGS_UPDATE_NOTE_LINE_LEN 192U
-#define SETTINGS_UPDATE_NOTE_CODEPOINTS 46U
 #define SETTINGS_WLAN_LOADING_FRAME_COUNT 8U
 #define SETTINGS_WLAN_LOADING_PERIOD_MS 125U
 #define SETTINGS_WLAN_SCAN_REFRESH_US INT64_C(15000000)
@@ -202,10 +197,8 @@ typedef struct {
     const char *wlan_notice_message;
     bool wlan_scan_compact;
     bool wlan_scan_compact_valid;
+    bool wlan_list_attached;
     int64_t wlan_toggle_last_us;
-    uint32_t update_notice_sequence;
-    bool update_page_active;
-    bool update_leave_pending;
     settings_wlan_state_t wlan;
 } settings_ui_state_t;
 
@@ -213,21 +206,15 @@ static mosaic_settings_wifi_ap_t
     s_wlan_networks[MOSAIC_SETTINGS_WIFI_SCAN_MAX];
 static size_t s_wlan_network_count;
 
-static esp_gsp_list_t s_wlan_list = ESP_GSP_LIST_NONE;
+typedef struct {
+    esp_gsp_list_t handle;
+    size_t total;
+    bool dirty;
+} settings_wlan_list_t;
+
+static settings_wlan_list_t s_wlan_lists[2];
 static esp_gsp_list_t s_root_list = ESP_GSP_LIST_NONE;
 static esp_gsp_list_t s_detail_list = ESP_GSP_LIST_NONE;
-static esp_gsp_list_t s_update_notes_list = ESP_GSP_LIST_NONE;
-
-typedef struct {
-    char text[SETTINGS_UPDATE_NOTE_LINE_LEN];
-    bool title;
-} settings_update_note_line_t;
-
-static settings_update_note_line_t
-    s_update_note_lines[SETTINGS_UPDATE_NOTE_MAX_ROWS];
-static size_t s_update_note_count;
-static char s_rendered_update_title[MOSAIC_SETTINGS_UPDATE_TITLE_LEN];
-static char s_rendered_update_summary[MOSAIC_SETTINGS_UPDATE_SUMMARY_LEN];
 
 typedef enum {
     SETTINGS_DETAIL_ABOUT,
@@ -834,14 +821,6 @@ esp_err_t mosaic_settings_factory_reset(void)
     return s_state.ops.factory_reset(s_state.ops.user_ctx);
 }
 
-esp_err_t mosaic_settings_request_update_check(void)
-{
-    if (s_state.ops.request_update_check == NULL) {
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-    return s_state.ops.request_update_check(s_state.ops.user_ctx);
-}
-
 esp_err_t mosaic_settings_get_snapshot(
     mosaic_settings_snapshot_t *ret_snapshot)
 {
@@ -1363,7 +1342,6 @@ static const settings_detail_row_t s_about_rows[] = {
     {"GSP", "GSP", "--", false, false, false},
     {"Display", "显示", "2.16\" 480×480", false, false, false},
     {"Serial", "序列号", "--", false, false, false},
-    {"Update", "更新", "", false, true, true},
 };
 
 static const settings_detail_row_t s_safe_rows[] = {
@@ -1542,40 +1520,7 @@ static gsp_err_t settings_detail_bind_item(
         case 4:
             value = s_state.snapshot.serial_number[0] != '\0' ? s_state.snapshot.serial_number : "--";
             break;
-        case 5:
-            switch (s_state.snapshot.update.state) {
-            case MOSAIC_SETTINGS_UPDATE_CHECKING:
-                value = TR("Checking...", "检查中...");
-                break;
-            case MOSAIC_SETTINGS_UPDATE_UP_TO_DATE:
-                value = TR("Up to date", "已是最新");
-                break;
-            case MOSAIC_SETTINGS_UPDATE_AVAILABLE:
-                if (s_state.snapshot.update.latest_version[0] != '\0') {
-                    if (mosaic_i18n_is_chinese()) {
-                        (void)snprintf(value_text, sizeof(value_text),
-                                       "%s 可更新",
-                                       s_state.snapshot.update.latest_version);
-                    } else {
-                        (void)snprintf(value_text, sizeof(value_text),
-                                       "v%s available",
-                                       s_state.snapshot.update.latest_version);
-                    }
-                    value = value_text;
-                }
-                break;
-            case MOSAIC_SETTINGS_UPDATE_DEVICE_AHEAD:
-                value = TR("Device is newer", "设备版本更新");
-                break;
-            case MOSAIC_SETTINGS_UPDATE_FAILED:
-                value = TR("Check failed", "检查失败");
-                break;
-            case MOSAIC_SETTINGS_UPDATE_IDLE:
-            default:
-                value = TR("Check now", "立即检查");
-                break;
-            }
-            break;
+
         default:
             break;
         }
@@ -1867,19 +1812,91 @@ static bool settings_wlan_show_current(void)
            s_state.wlan.current_ssid[0] != '\0';
 }
 
+static void settings_wlan_lists_reset(void)
+{
+    for (size_t i = 0; i < 2; ++i) {
+        s_wlan_lists[i] = (settings_wlan_list_t) {
+            .handle = ESP_GSP_LIST_NONE,
+            .dirty = true,
+        };
+    }
+    s_state.wlan_list_attached = false;
+}
+
+static esp_gsp_err_t settings_wlan_apply_layout(esp_gsp_handle_t ui)
+{
+    const bool compact = !settings_wlan_show_current();
+    if (s_state.wlan_scan_compact_valid &&
+            s_state.wlan_scan_compact == compact) {
+        return ESP_GSP_OK;
+    }
+    s_state.wlan_scan_compact_valid = false;
+    esp_gsp_err_t err = compact
+        ? gsp_settings_settings_wlan_scan_connected_layer_set_visible(ui, false)
+        : gsp_settings_settings_wlan_scan_layer_set_visible(ui, false);
+    if (err == ESP_GSP_OK) {
+        err = compact
+            ? gsp_settings_settings_wlan_scan_layer_set_visible(ui, true)
+            : gsp_settings_settings_wlan_scan_connected_layer_set_visible(ui, true);
+    }
+    if (err == ESP_GSP_OK) {
+        s_state.wlan_scan_compact = compact;
+        s_state.wlan_scan_compact_valid = true;
+    }
+    return err;
+}
+
 static void settings_wlan_refresh_list(esp_gsp_handle_t ui)
 {
-    if (s_wlan_list == ESP_GSP_LIST_NONE) {
+    if (!s_state.wlan_list_attached) {
         return;
     }
-    esp_gsp_err_t err = esp_gsp_list_set_total(
-        ui, s_wlan_list, s_wlan_network_count);
-    if (err == ESP_GSP_OK) {
-        err = esp_gsp_list_refresh(ui, s_wlan_list);
-    }
+    const size_t active = settings_wlan_show_current() ? 1 : 0;
+    const gsp_component_key_t keys[] = {
+        GSP_OBJ_KEY_SETTINGS_WLAN_SCAN_LIST,
+        GSP_OBJ_KEY_SETTINGS_WLAN_SCAN_CONNECTED_LIST,
+    };
+    settings_wlan_list_t *inactive = &s_wlan_lists[1 - active];
+    settings_wlan_list_t *list = &s_wlan_lists[active];
+    esp_gsp_err_t err = settings_wlan_apply_layout(ui);
     if (err != ESP_GSP_OK) {
-        ESP_LOGW(TAG, "refresh WLAN List failed: 0x%x", (unsigned)err);
+        goto failed;
     }
+    if (inactive->handle != ESP_GSP_LIST_NONE && inactive->total != 0) {
+        err = esp_gsp_list_set_total(ui, inactive->handle, 0);
+        if (err != ESP_GSP_OK) {
+            goto failed;
+        }
+        inactive->total = 0;
+        inactive->dirty = true;
+    }
+    if (list->handle == ESP_GSP_LIST_NONE) {
+        list->handle = esp_gsp_list_bind_component(
+            ui, keys[active], settings_wlan_list_bind_item, NULL);
+        if (list->handle == ESP_GSP_LIST_NONE) {
+            ESP_LOGW(TAG, "bind WLAN scan list failed");
+            return;
+        }
+    }
+    if (list->total != s_wlan_network_count) {
+        err = esp_gsp_list_set_total(ui, list->handle, s_wlan_network_count);
+        if (err != ESP_GSP_OK) {
+            goto failed;
+        }
+        list->total = s_wlan_network_count;
+        list->dirty = true;
+    }
+    if (list->dirty) {
+        err = esp_gsp_list_refresh(ui, list->handle);
+        if (err != ESP_GSP_OK) {
+            goto failed;
+        }
+        list->dirty = false;
+    }
+    return;
+
+failed:
+    ESP_LOGW(TAG, "refresh WLAN List failed: 0x%x", (unsigned)err);
 }
 
 static void settings_wlan_scan(esp_gsp_handle_t ui)
@@ -1911,14 +1928,19 @@ static void settings_wlan_scan(esp_gsp_handle_t ui)
     if (count > MOSAIC_SETTINGS_WIFI_SCAN_MAX) {
         count = MOSAIC_SETTINGS_WIFI_SCAN_MAX;
     }
-    const bool changed = count != s_wlan_network_count ||
-        (count != 0 && memcmp(s_wlan_networks, networks,
-                              count * sizeof(networks[0])) != 0);
+    bool changed = count != s_wlan_network_count;
+    for (size_t i = 0; !changed && i < count; ++i) {
+        changed = strcmp(s_wlan_networks[i].ssid, networks[i].ssid) != 0 ||
+            s_wlan_networks[i].secured != networks[i].secured;
+    }
     if (!changed) {
         return;
     }
     memcpy(s_wlan_networks, networks, count * sizeof(networks[0]));
     s_wlan_network_count = count;
+    for (size_t i = 0; i < 2; ++i) {
+        s_wlan_lists[i].dirty = true;
+    }
     settings_wlan_refresh_list(ui);
 }
 
@@ -1956,15 +1978,7 @@ static void settings_wlan_update_summary(esp_gsp_handle_t ui)
 
 static void settings_wlan_list_attach(esp_gsp_handle_t ui)
 {
-    if (s_wlan_list == ESP_GSP_LIST_NONE) {
-        s_wlan_list = esp_gsp_list_bind_component(
-            ui, GSP_OBJ_KEY_SETTINGS_WLAN_SCAN_LIST,
-            settings_wlan_list_bind_item, NULL);
-    }
-    if (s_wlan_list == ESP_GSP_LIST_NONE) {
-        ESP_LOGW(TAG, "bind WLAN scan list failed");
-        return;
-    }
+    s_state.wlan_list_attached = true;
     if (s_wlan_network_count == 0) {
         settings_wlan_scan(ui);
     }
@@ -1976,9 +1990,19 @@ static void settings_wlan_list_park(esp_gsp_handle_t ui)
     /* Dynamic row instances are owned by the List driver, not by the scene
      * layer that authored the viewport. Emptying the List is the explicit
      * lifecycle boundary that removes rows before the Settings root returns. */
-    if (s_wlan_list != ESP_GSP_LIST_NONE) {
-        (void)esp_gsp_list_set_total(ui, s_wlan_list, 0);
-        (void)esp_gsp_list_refresh(ui, s_wlan_list);
+    s_state.wlan_list_attached = false;
+    for (size_t i = 0; i < 2; ++i) {
+        settings_wlan_list_t *list = &s_wlan_lists[i];
+        if (list->handle == ESP_GSP_LIST_NONE || list->total == 0) {
+            continue;
+        }
+        esp_gsp_err_t err = esp_gsp_list_set_total(ui, list->handle, 0);
+        if (err == ESP_GSP_OK) {
+            list->total = 0;
+            list->dirty = true;
+        } else {
+            ESP_LOGW(TAG, "park WLAN List failed: 0x%x", (unsigned)err);
+        }
     }
 }
 
@@ -2182,15 +2206,7 @@ static esp_err_t settings_wlan_render(esp_gsp_handle_t ui)
     keep_first_error(&result,
         gsp_settings_settings_wlan_current_error_set_visible(
             ui, false));
-    const bool compact = !show_current;
-    if (!s_state.wlan_scan_compact_valid ||
-            s_state.wlan_scan_compact != compact) {
-        keep_first_error(&result, esp_gsp_component_set_position(
-            ui, GSP_OBJ_KEY_SETTINGS_WLAN_SCAN_LAYER,
-            0, compact ? 0 : 100));
-        s_state.wlan_scan_compact = compact;
-        s_state.wlan_scan_compact_valid = true;
-    }
+    keep_first_error(&result, settings_wlan_apply_layout(ui));
     keep_first_error(&result,
         gsp_settings_settings_wlan_current_status_set_text(ui, status));
     if (wlan->current_ssid[0] != '\0') {
@@ -2433,7 +2449,7 @@ static void settings_wlan_pop_to_wlan(esp_gsp_handle_t ui)
     /* Each UI path calls this exactly once. StackView queues the command when
      * invoked from an input callback and applies it at the next frame. */
     if (esp_gsp_stack_view_pop(
-            ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
+            ui, GSP_OBJ_KEY_SETTINGS_STACK, false) != ESP_GSP_OK) {
         ESP_LOGW(TAG, "return from WLAN password page failed");
     } else if (s_state.wlan_page_active && s_state.wlan.enabled) {
         settings_wlan_list_attach(ui);
@@ -2481,7 +2497,7 @@ static bool settings_wlan_reconcile_navigation(esp_gsp_handle_t ui)
     if (s_state.wlan_phone_exit_pending &&
             page == SETTINGS_WLAN_PASSWORD_PAGE && !animating) {
         if (esp_gsp_stack_view_pop(
-                ui, GSP_OBJ_KEY_SETTINGS_STACK, true) == ESP_GSP_OK) {
+                ui, GSP_OBJ_KEY_SETTINGS_STACK, false) == ESP_GSP_OK) {
             s_state.wlan_phone_exit_pending = false;
             s_state.wlan_phone_active = false;
             s_state.wlan_phone_operation_id = 0;
@@ -2646,7 +2662,7 @@ static void settings_wlan_complete_phone_setup(esp_gsp_handle_t ui)
      * reconciliation pops the password page after this transition settles. */
     s_state.wlan_phone_exit_pending = true;
     if (esp_gsp_stack_view_pop(
-            ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
+            ui, GSP_OBJ_KEY_SETTINGS_STACK, false) != ESP_GSP_OK) {
         s_state.wlan_phone_exit_pending = false;
         return;
     }
@@ -2738,7 +2754,7 @@ static void settings_wlan_handle_forget(esp_gsp_handle_t ui)
     s_state.snapshot.network.ssid[0] = '\0';
     (void)settings_wlan_render(ui);
     if (esp_gsp_stack_view_pop(
-            ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
+            ui, GSP_OBJ_KEY_SETTINGS_STACK, false) != ESP_GSP_OK) {
         s_state.wlan_forget_pending = false;
     }
 }
@@ -2828,490 +2844,6 @@ static void settings_refresh_about_detail(esp_gsp_handle_t ui)
             s_detail_list != ESP_GSP_LIST_NONE) {
         (void)esp_gsp_list_refresh(ui, s_detail_list);
     }
-}
-
-static bool settings_update_page_visible(esp_gsp_handle_t ui)
-{
-    uint16_t top = 0U;
-    return esp_gsp_stack_view_get_top(
-            ui, GSP_OBJ_KEY_SETTINGS_STACK, &top) == ESP_GSP_OK &&
-        top == SETTINGS_UPDATE_PAGE;
-}
-
-static size_t settings_utf8_prefix_bytes(const char *text,
-                                         size_t max_codepoints)
-{
-    size_t offset = 0U;
-    size_t count = 0U;
-    while (text[offset] != '\0' && count < max_codepoints) {
-        const unsigned char lead = (unsigned char)text[offset];
-        size_t width = 1U;
-        if ((lead & 0xE0U) == 0xC0U) {
-            width = 2U;
-        } else if ((lead & 0xF0U) == 0xE0U) {
-            width = 3U;
-        } else if ((lead & 0xF8U) == 0xF0U) {
-            width = 4U;
-        }
-        for (size_t i = 1U; i < width; ++i) {
-            if (text[offset + i] == '\0' ||
-                    ((unsigned char)text[offset + i] & 0xC0U) != 0x80U) {
-                width = 1U;
-                break;
-            }
-        }
-        offset += width;
-        ++count;
-    }
-    return offset;
-}
-
-static void settings_update_note_append_text(const char *text, bool title)
-{
-    if (text == NULL) {
-        return;
-    }
-
-    const char *cursor = text;
-    while (*cursor != '\0' &&
-            s_update_note_count < SETTINGS_UPDATE_NOTE_MAX_ROWS) {
-        while (*cursor == ' ' || *cursor == '\n' || *cursor == '\r') {
-            ++cursor;
-        }
-        if (*cursor == '\0') {
-            break;
-        }
-
-        size_t cut = settings_utf8_prefix_bytes(
-            cursor, SETTINGS_UPDATE_NOTE_CODEPOINTS);
-        const char *newline = strchr(cursor, '\n');
-        if (newline != NULL && (size_t)(newline - cursor) < cut) {
-            cut = (size_t)(newline - cursor);
-        } else if (cursor[cut] != '\0') {
-            size_t word_cut = cut;
-            while (word_cut > cut / 2U && cursor[word_cut] != ' ') {
-                --word_cut;
-            }
-            if (cursor[word_cut] == ' ') {
-                cut = word_cut;
-            }
-        }
-
-        if (cut == 0U) {
-            ++cursor;
-            continue;
-        }
-
-        settings_update_note_line_t *line =
-            &s_update_note_lines[s_update_note_count];
-        const size_t copy_len = cut < sizeof(line->text) - 1U
-            ? cut : sizeof(line->text) - 1U;
-        memcpy(line->text, cursor, copy_len);
-        line->text[copy_len] = '\0';
-        size_t length = strlen(line->text);
-        while (length > 0U && line->text[length - 1U] == ' ') {
-            line->text[--length] = '\0';
-        }
-        line->title = title;
-        ++s_update_note_count;
-
-        cursor += cut;
-    }
-}
-
-static gsp_err_t settings_update_note_bind_item(
-    esp_gsp_handle_t ui, esp_gsp_row_t row, uint32_t item_index,
-    void *user_ctx)
-{
-    (void)user_ctx;
-    if (item_index >= s_update_note_count) {
-        return GSP_ERR_INVALID_ARG;
-    }
-
-    const settings_update_note_line_t *line =
-        &s_update_note_lines[item_index];
-    esp_gsp_err_t err =
-        gsp_settings_settings_update_note_row_row_set_text_text(
-            ui, row, line->text);
-    if (err == ESP_GSP_OK) {
-        err = gsp_settings_settings_update_note_row_row_set_text_fg_color(
-            ui, row, line->title ? SETTINGS_TEXT_COLOR
-                                 : SETTINGS_MUTED_COLOR);
-    }
-    return err == ESP_GSP_OK ? GSP_OK : GSP_ERR_INVALID_STATE;
-}
-
-static void settings_update_notes_attach(esp_gsp_handle_t ui)
-{
-    if (s_update_notes_list == ESP_GSP_LIST_NONE) {
-        s_update_notes_list = esp_gsp_list_bind_component(
-            ui, GSP_OBJ_KEY_SETTINGS_UPDATE_NOTES_LIST,
-            settings_update_note_bind_item, NULL);
-    }
-}
-
-static void settings_update_notes_render(esp_gsp_handle_t ui,
-                                         const char *title,
-                                         const char *summary)
-{
-    title = title != NULL ? title : "";
-    summary = summary != NULL ? summary : "";
-    settings_update_notes_attach(ui);
-    if (s_update_notes_list == ESP_GSP_LIST_NONE ||
-            (strcmp(title, s_rendered_update_title) == 0 &&
-             strcmp(summary, s_rendered_update_summary) == 0)) {
-        return;
-    }
-
-    strlcpy(s_rendered_update_title, title,
-            sizeof(s_rendered_update_title));
-    strlcpy(s_rendered_update_summary, summary,
-            sizeof(s_rendered_update_summary));
-    s_update_note_count = 0U;
-    settings_update_note_append_text(title, true);
-    settings_update_note_append_text(summary, false);
-    if (s_update_note_count == 0U) {
-        settings_update_note_append_text(
-            TR("No release notes available", "暂无发布说明"), false);
-    }
-    (void)esp_gsp_list_set_total(
-        ui, s_update_notes_list, s_update_note_count);
-    (void)esp_gsp_list_refresh(ui, s_update_notes_list);
-    (void)esp_gsp_list_scroll_to(ui, s_update_notes_list, 0);
-}
-
-static void settings_update_notes_park(esp_gsp_handle_t ui)
-{
-    if (s_update_notes_list != ESP_GSP_LIST_NONE) {
-        (void)esp_gsp_list_set_total(ui, s_update_notes_list, 0U);
-        (void)esp_gsp_list_refresh(ui, s_update_notes_list);
-    }
-    s_update_note_count = 0U;
-    s_rendered_update_title[0] = '\0';
-    s_rendered_update_summary[0] = '\0';
-}
-
-static void settings_render_update_page(esp_gsp_handle_t ui)
-{
-    const mosaic_settings_update_t *update = &s_state.snapshot.update;
-    const char *icon = "i";
-    const char *status = TR("Ready to Check", "可以检查");
-    const char *status_detail =
-        TR("Compare with the published release", "与已发布版本比较");
-    const char *status_detail_2 = "";
-    const char *latest = TR("Not checked", "未检查");
-    const char *heading = TR("ABOUT UPDATE CHECKS", "关于更新检查");
-    const char *title = TR("Release information only", "仅供发布参考");
-    const char *summary =
-        TR("Checks the latest published software version. No files are installed.",
-           "检查已发布的最新软件版本，不会安装任何文件。");
-    const char *action = TR("Check Again", "重新检查");
-    bool published_visible = false;
-    switch (update->state) {
-    case MOSAIC_SETTINGS_UPDATE_CHECKING:
-        icon = "…";
-        status = TR("Checking for Updates", "正在检查更新");
-        status_detail = TR("Contacting the update server", "正在连接更新服务器");
-        latest = TR("Checking...", "检查中...");
-        heading = TR("PLEASE WAIT", "请稍候");
-        title = TR("Fetching release information", "正在获取发布信息");
-        summary = TR("The device is reading the published version and release notes.",
-                     "设备正在读取已发布版本与发布说明。");
-        action = TR("Checking...", "检查中...");
-        break;
-    case MOSAIC_SETTINGS_UPDATE_AVAILABLE:
-        icon = "^";
-        status = TR("Update Available", "有可用更新");
-        status_detail = TR("Visit https://mosaico.espressif.com/",
-                           "访问 https://mosaico.espressif.com/");
-        status_detail_2 = TR("for updates", "获取更新");
-        latest = update->latest_version[0] != '\0'
-            ? update->latest_version : TR("Available", "可用");
-        heading = TR("WHAT'S NEW", "更新内容");
-        title = update->title[0] != '\0'
-            ? update->title : TR("A newer version is available", "有新版本可用");
-        summary = update->summary[0] != '\0'
-            ? update->summary : TR("Review the published release information.",
-                                   "查看已发布的版本信息。");
-        published_visible = update->published_at[0] != '\0';
-        break;
-    case MOSAIC_SETTINGS_UPDATE_UP_TO_DATE:
-        icon = "OK";
-        status = TR("Up to Date", "已是最新");
-        status_detail = TR("This device matches the published release",
-                           "本设备与已发布版本一致");
-        latest = update->latest_version[0] != '\0'
-            ? update->latest_version : s_state.snapshot.software_version;
-        heading = TR("LATEST RELEASE", "最新版本");
-        title = update->title[0] != '\0'
-            ? update->title : TR("Your software is current", "软件已是最新");
-        summary = update->summary[0] != '\0'
-            ? update->summary : TR("No newer published version was found.",
-                                   "未发现更新的已发布版本。");
-        published_visible = update->published_at[0] != '\0';
-        break;
-    case MOSAIC_SETTINGS_UPDATE_DEVICE_AHEAD:
-        icon = "^";
-        status = TR("Development Version", "开发版本");
-        status_detail = TR("This device is newer than the published release",
-                           "本设备版本比已发布版本更新");
-        latest = update->latest_version[0] != '\0'
-            ? update->latest_version : TR("Unavailable", "不可用");
-        heading = TR("PUBLISHED RELEASE", "已发布版本");
-        title = TR("Device version is newer", "设备版本更新");
-        summary = update->summary[0] != '\0'
-            ? update->summary : TR("This device is ahead of the published release.",
-                                   "本设备领先于已发布版本。");
-        published_visible = update->published_at[0] != '\0';
-        break;
-    case MOSAIC_SETTINGS_UPDATE_FAILED:
-        icon = "!";
-        status = TR("Check Failed", "检查失败");
-        status_detail = TR("The update manifest could not be loaded",
-                           "无法加载更新清单");
-        latest = TR("Unavailable", "不可用");
-        heading = TR("NEXT STEP", "下一步");
-        title = update->title[0] != '\0' ? update->title
-            : TR("Check the network and update source", "检查网络与更新源");
-        summary = update->summary[0] != '\0' ? update->summary
-            : TR("Confirm the connection and manifest URL, then try again.",
-                 "确认网络连接与清单网址后重试。");
-        break;
-    case MOSAIC_SETTINGS_UPDATE_IDLE:
-    default:
-        break;
-    }
-
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_BACK, "‹");
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_NAV_TITLE,
-                           TR("Software Update", "软件更新"));
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_CURRENT_LABEL,
-                           TR("CURRENT", "当前"));
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_LATEST_LABEL,
-                           TR("PUBLISHED", "已发布"));
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_ARROW, ">");
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_ICON, icon);
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS, status);
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_DETAIL,
-                           status_detail);
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_DETAIL_2,
-                           status_detail_2);
-    (void)esp_gsp_set_text(
-        ui, GSP_BIND_SETTINGS_UPDATE_CURRENT_VERSION,
-        s_state.snapshot.software_version[0] != '\0'
-            ? s_state.snapshot.software_version : "--");
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_LATEST_VERSION,
-                           latest);
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_HEADING, heading);
-    settings_update_notes_render(ui, title, summary);
-    char published_at[MOSAIC_SETTINGS_UPDATE_PUBLISHED_AT_LEN];
-    strlcpy(published_at, update->published_at, sizeof(published_at));
-    char *time_separator = strchr(published_at, 'T');
-    if (time_separator != NULL) {
-        *time_separator = '\0';
-    }
-    (void)esp_gsp_set_text(
-        ui, GSP_BIND_SETTINGS_UPDATE_PUBLISHED_AT,
-        published_at[0] != '\0' ? published_at : "");
-    (void)esp_gsp_set_visible(ui, GSP_BIND_SETTINGS_UPDATE_PUBLISHED_VISIBLE,
-                              published_visible);
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_DISCLAIMER,
-                           TR("Information only · No automatic installation",
-                              "仅供参考 · 不自动安装"));
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_ACTION, action);
-    /* Text updates clear their previous bounds. Re-submit the retained card
-     * fills so the compositor redraws each complete card behind new text. */
-    (void)esp_gsp_set_color(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_CARD_COLOR,
-                            SETTINGS_LEVEL_OFF_COLOR);
-    (void)esp_gsp_set_color(ui, GSP_BIND_SETTINGS_UPDATE_ACTION_CARD_COLOR,
-                            SETTINGS_LEVEL_OFF_COLOR);
-}
-
-static void settings_render_update_error(esp_gsp_handle_t ui,
-                                         const char *status,
-                                         const char *detail,
-                                         const char *title,
-                                         const char *message)
-{
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_BACK, "‹");
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_NAV_TITLE,
-                           TR("Software Update", "软件更新"));
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_CURRENT_LABEL,
-                           TR("CURRENT", "当前"));
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_LATEST_LABEL,
-                           TR("PUBLISHED", "已发布"));
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_ARROW, ">");
-    (void)esp_gsp_set_text(
-        ui, GSP_BIND_SETTINGS_UPDATE_CURRENT_VERSION,
-        s_state.snapshot.software_version[0] != '\0'
-            ? s_state.snapshot.software_version : "--");
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_ICON, "!");
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS, status);
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_DETAIL, detail);
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_DETAIL_2, "");
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_LATEST_VERSION,
-                           TR("Unavailable", "不可用"));
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_HEADING,
-                           TR("NEXT STEP", "下一步"));
-    settings_update_notes_render(ui, title, message);
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_PUBLISHED_AT, "");
-    (void)esp_gsp_set_visible(ui, GSP_BIND_SETTINGS_UPDATE_PUBLISHED_VISIBLE,
-                              false);
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_DISCLAIMER,
-                           TR("Information only · No automatic installation",
-                              "仅供参考 · 不自动安装"));
-    (void)esp_gsp_set_text(ui, GSP_BIND_SETTINGS_UPDATE_ACTION,
-                           TR("Try Again", "重试"));
-    (void)esp_gsp_set_color(ui, GSP_BIND_SETTINGS_UPDATE_STATUS_CARD_COLOR,
-                            SETTINGS_LEVEL_OFF_COLOR);
-    (void)esp_gsp_set_color(ui, GSP_BIND_SETTINGS_UPDATE_ACTION_CARD_COLOR,
-                            SETTINGS_LEVEL_OFF_COLOR);
-}
-
-static void settings_start_update_check(esp_gsp_handle_t ui)
-{
-    if (s_state.snapshot.update.state == MOSAIC_SETTINGS_UPDATE_CHECKING) {
-        settings_render_update_page(ui);
-        return;
-    }
-    if (!s_state.snapshot.network.connected) {
-        settings_render_update_error(
-            ui, TR("Unable to Check", "无法检查"),
-            TR("No internet connection", "无网络连接"),
-            TR("Connect to Wi-Fi", "连接 Wi-Fi"),
-            TR("A network connection is required to check the published version.",
-               "检查已发布版本需要网络连接。"));
-        return;
-    }
-    const esp_err_t err = mosaic_settings_request_update_check();
-    if (err != ESP_OK) {
-        settings_render_update_error(
-            ui, TR("Check Unavailable", "检查不可用"),
-            TR("Update source is not configured", "未配置更新源"),
-            TR("Configure the update source", "配置更新源"),
-            err == ESP_ERR_NOT_SUPPORTED
-                ? TR("Configure APP_UPDATE_MANIFEST_URL first.",
-                     "请先配置 APP_UPDATE_MANIFEST_URL。")
-                : TR("Unable to start the update check.", "无法启动更新检查。"));
-        return;
-    }
-    s_state.snapshot.update.state = MOSAIC_SETTINGS_UPDATE_CHECKING;
-    settings_refresh_about_detail(ui);
-    settings_render_update_page(ui);
-}
-
-static void settings_open_update_page(esp_gsp_handle_t ui)
-{
-    if (s_state.update_page_active) {
-        return;
-    }
-    s_state.update_page_active = true;
-    s_state.update_leave_pending = false;
-    if (esp_gsp_stack_view_push(ui, GSP_OBJ_KEY_SETTINGS_STACK,
-            SETTINGS_UPDATE_PAGE, true) != ESP_GSP_OK) {
-        s_state.update_page_active = false;
-        (void)mosaic_top_notice_show(
-            ui, &s_top_notice, TR("Software Update", "软件更新"),
-            TR("Unable to open page", "无法打开页面"),
-            SETTINGS_NOTICE_DURATION_MS);
-        return;
-    }
-    mosaic_app_shell_set_root_visible(ui, false);
-    settings_render_update_page(ui);
-    settings_start_update_check(ui);
-}
-
-static void settings_leave_update_page(esp_gsp_handle_t ui)
-{
-    if (!s_state.update_page_active || s_state.update_leave_pending ||
-            !settings_update_page_visible(ui)) {
-        return;
-    }
-    s_state.update_leave_pending = true;
-    if (esp_gsp_stack_view_pop(
-            ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
-        s_state.update_leave_pending = false;
-        return;
-    }
-    s_state.update_page_active = false;
-    s_state.update_leave_pending = false;
-    settings_update_notes_park(ui);
-    /* The destination is the About detail page, not the Settings root. */
-    mosaic_app_shell_set_root_visible(ui, false);
-}
-
-static void settings_show_update_result(esp_gsp_handle_t ui)
-{
-    const mosaic_settings_update_t *update = &s_state.snapshot.update;
-    if (update->sequence == 0U ||
-            update->sequence == s_state.update_notice_sequence ||
-            update->state == MOSAIC_SETTINGS_UPDATE_IDLE ||
-            update->state == MOSAIC_SETTINGS_UPDATE_CHECKING) {
-        return;
-    }
-    s_state.update_notice_sequence = update->sequence;
-    if (s_state.update_page_active) {
-        return;
-    }
-    char title[96];
-    char message[256];
-    switch (update->state) {
-    case MOSAIC_SETTINGS_UPDATE_AVAILABLE:
-        if (update->title[0] != '\0') {
-            strlcpy(title, update->title, sizeof(title));
-        } else if (mosaic_i18n_is_chinese()) {
-            (void)snprintf(title, sizeof(title), "版本 %s 可用",
-                           update->latest_version);
-        } else {
-            (void)snprintf(title, sizeof(title), "Version %s available",
-                           update->latest_version);
-        }
-        if (update->summary[0] != '\0') {
-            strlcpy(message, update->summary, sizeof(message));
-        } else if (mosaic_i18n_is_chinese()) {
-            (void)snprintf(message, sizeof(message), "当前 %s · 最新 %s",
-                           s_state.snapshot.software_version,
-                           update->latest_version);
-        } else {
-            (void)snprintf(message, sizeof(message), "Current %s · Latest %s",
-                           s_state.snapshot.software_version,
-                           update->latest_version);
-        }
-        break;
-    case MOSAIC_SETTINGS_UPDATE_UP_TO_DATE:
-        strlcpy(title, TR("Up to Date", "已是最新"), sizeof(title));
-        if (mosaic_i18n_is_chinese()) {
-            (void)snprintf(message, sizeof(message), "版本 %s 已是最新",
-                           s_state.snapshot.software_version);
-        } else {
-            (void)snprintf(message, sizeof(message), "Version %s is current",
-                           s_state.snapshot.software_version);
-        }
-        break;
-    case MOSAIC_SETTINGS_UPDATE_DEVICE_AHEAD:
-        strlcpy(title, TR("Development Version", "开发版本"), sizeof(title));
-        if (mosaic_i18n_is_chinese()) {
-            (void)snprintf(message, sizeof(message), "设备 %s · 已发布 %s",
-                           s_state.snapshot.software_version,
-                           update->latest_version);
-        } else {
-            (void)snprintf(message, sizeof(message), "Device %s · Published %s",
-                           s_state.snapshot.software_version,
-                           update->latest_version);
-        }
-        break;
-    case MOSAIC_SETTINGS_UPDATE_FAILED:
-    default:
-        strlcpy(title, TR("Check Failed", "检查失败"), sizeof(title));
-        strlcpy(message,
-                TR("Check the network and manifest, then try again",
-                   "请检查网络与清单后重试"),
-                sizeof(message));
-        break;
-    }
-    (void)mosaic_top_notice_show(
-        ui, &s_top_notice, title, message,
-        SETTINGS_UPDATE_NOTICE_DURATION_MS);
 }
 
 static void settings_refresh_battery_detail(esp_gsp_handle_t ui)
@@ -3707,7 +3239,7 @@ static void settings_integrations_pop(esp_gsp_handle_t ui)
 {
     settings_refresh_snapshot(ui);
     settings_root_list_refresh(ui);
-    (void)esp_gsp_stack_view_pop(ui, GSP_OBJ_KEY_SETTINGS_STACK, true);
+    (void)esp_gsp_stack_view_pop(ui, GSP_OBJ_KEY_SETTINGS_STACK, false);
     mosaic_app_shell_set_root_visible(ui, true);
     s_state.integration_page = 0;
 }
@@ -3787,8 +3319,6 @@ static void settings_dispatch_call(
         if (item == SETTINGS_ROOT_ABOUT_INDEX) {
             settings_refresh_snapshot(ui);
             settings_open_detail(ui, SETTINGS_DETAIL_ABOUT);
-            s_state.update_notice_sequence =
-                s_state.snapshot.update.sequence;
             return;
         }
         if (item == SETTINGS_ROOT_LOCATION_INDEX) {
@@ -3893,7 +3423,7 @@ static void settings_dispatch_call(
         s_state.wlan_entry_pending = false;
         s_state.wlan_leave_pending = true;
         if (esp_gsp_stack_view_pop(
-                ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
+                ui, GSP_OBJ_KEY_SETTINGS_STACK, false) != ESP_GSP_OK) {
             s_state.wlan_leave_pending = false;
             return;
         }
@@ -3990,11 +3520,7 @@ static void settings_dispatch_call(
             (void)esp_gsp_list_refresh(ui, s_detail_list);
             return;
         }
-        if (s_detail_kind == SETTINGS_DETAIL_ABOUT &&
-                event->data.call.item == 5U) {
-            settings_open_update_page(ui);
-            return;
-        }
+
         if (s_detail_kind == SETTINGS_DETAIL_SAFE_MODE &&
                 event->data.call.item == 3U) {
             (void)mosaic_top_notice_show(
@@ -4002,15 +3528,6 @@ static void settings_dispatch_call(
                 TR("Restart required", "需要重启"),
                 SETTINGS_NOTICE_DURATION_MS);
         }
-        return;
-    case GSP_ACT_ID_SETTINGS_UPDATE_CHECK:
-        if (s_state.update_page_active &&
-                settings_update_page_visible(ui)) {
-            settings_start_update_check(ui);
-        }
-        return;
-    case GSP_ACT_ID_SETTINGS_UPDATE_LEAVE:
-        settings_leave_update_page(ui);
         return;
     case GSP_ACT_ID_SETTINGS_WEB_LOGS_TOGGLE: {
         /* Each visible button requests an explicit state, so a duplicate
@@ -4119,7 +3636,7 @@ static void settings_dispatch_call(
         }
         s_state.wlan_detail_leave_pending = true;
         if (esp_gsp_stack_view_pop(
-                ui, GSP_OBJ_KEY_SETTINGS_STACK, true) != ESP_GSP_OK) {
+                ui, GSP_OBJ_KEY_SETTINGS_STACK, false) != ESP_GSP_OK) {
             s_state.wlan_detail_leave_pending = false;
         }
         return;
@@ -4383,13 +3900,9 @@ static void settings_event(
         s_state.wlan.selected_ssid[0] = '\0';
         s_state.wlan.password[0] = '\0';
         s_root_list = ESP_GSP_LIST_NONE;
-        s_wlan_list = ESP_GSP_LIST_NONE;
+        settings_wlan_lists_reset();
         s_detail_list = ESP_GSP_LIST_NONE;
         s_city_province = -1;
-        s_update_notes_list = ESP_GSP_LIST_NONE;
-        s_update_note_count = 0U;
-        s_rendered_update_title[0] = '\0';
-        s_rendered_update_summary[0] = '\0';
         s_state.wlan_scan_compact_valid = false;
         s_wlan_network_count = 0;
         s_state.display_page_active = false;
@@ -4406,11 +3919,7 @@ static void settings_event(
         s_state.integration_rendered_progress = UINT8_MAX;
         s_state.rendered_channel_qr[0] = '\0';
         s_state.rendered_phone_qr[0] = '\0';
-        s_state.update_page_active = false;
-        s_state.update_leave_pending = false;
         settings_refresh_snapshot(ui);
-        s_state.update_notice_sequence =
-            s_state.snapshot.update.sequence;
         s_state.wlan_scan_revision =
             s_state.snapshot.network.scan_revision;
         settings_root_list_attach(ui);
@@ -4433,10 +3942,6 @@ static void settings_event(
         settings_wlan_refresh_status(ui);
         settings_root_list_refresh(ui);
         settings_refresh_about_detail(ui);
-        if (s_state.update_page_active) {
-            settings_render_update_page(ui);
-        }
-        settings_show_update_result(ui);
         uint16_t model_top = 0U;
         if (s_detail_kind == SETTINGS_DETAIL_BATTERY &&
                 esp_gsp_stack_view_get_top(
@@ -4499,15 +4004,6 @@ static void settings_event(
                     }
                 }
             }
-        }
-        if (s_state.snapshot.update.state ==
-                MOSAIC_SETTINGS_UPDATE_CHECKING) {
-            settings_refresh_snapshot(ui);
-            settings_refresh_about_detail(ui);
-            if (s_state.update_page_active) {
-                settings_render_update_page(ui);
-            }
-            settings_show_update_result(ui);
         }
         if (settings_wlan_reconcile_navigation(ui)) {
             break;
@@ -4586,12 +4082,10 @@ static void settings_event(
         (void)settings_wlan_set_loading(ui, false);
         settings_wlan_password_detach(ui);
         settings_wlan_list_park(ui);
-        settings_update_notes_park(ui);
         s_root_list = ESP_GSP_LIST_NONE;
-        s_wlan_list = ESP_GSP_LIST_NONE;
+        settings_wlan_lists_reset();
         s_detail_list = ESP_GSP_LIST_NONE;
         s_city_province = -1;
-        s_update_notes_list = ESP_GSP_LIST_NONE;
         s_state.wlan_scan_compact_valid = false;
         s_state.wlan_notice_pending = false;
         s_state.wlan_notice_title = NULL;
@@ -4629,10 +4123,6 @@ static void settings_event(
 static bool settings_back(esp_gsp_handle_t ui, int64_t timestamp_us)
 {
     (void)timestamp_us;
-    if (settings_update_page_visible(ui)) {
-        settings_leave_update_page(ui);
-        return true;
-    }
     if (settings_detail_visible(ui, SETTINGS_DETAIL_CITY) &&
             s_city_province >= 0) {
         /* Leave the city list and return to the province list without popping
@@ -4643,8 +4133,16 @@ static bool settings_back(esp_gsp_handle_t ui, int64_t timestamp_us)
         return true;
     }
     s_state.integration_page = 0;
-    /* Return false so the loader performs the normal Settings StackView pop. */
-    return false;
+    uint16_t page = 0;
+    if (esp_gsp_stack_view_get_top(ui, GSP_OBJ_KEY_SETTINGS_STACK, &page) != ESP_GSP_OK || page == 0) {
+        return false;
+    }
+    /* Handle child-page Back here to bypass the loader's animated pop. */
+    esp_gsp_err_t err = esp_gsp_stack_view_pop(ui, GSP_OBJ_KEY_SETTINGS_STACK, false);
+    if (err != ESP_GSP_OK) {
+        ESP_LOGW(TAG, "return from Settings page failed: %d", (int)err);
+    }
+    return true;
 }
 
 const mosaic_app_descriptor_t mosaic_settings_app = {
@@ -4660,14 +4158,14 @@ const mosaic_app_descriptor_t mosaic_settings_app = {
     .root_stack_key = GSP_OBJ_KEY_SETTINGS_STACK,
     .disable_swipe = true,
     .root_header_in_stack = false,
-    /* Root, WLAN, Detail and Update StackView pages retain their materialized
+    /* Root, WLAN and Detail StackView pages retain their materialized
      * rows while another page is on top. Reserve the aggregate template
      * capacity so a child list cannot exhaust the shared pool. */
     .instance_slots =
         GSP_TEMPLATE_SETTINGS_ROOT_ROW_MAX_INSTANCES +
         GSP_TEMPLATE_SETTINGS_WLAN_ROW_MAX_INSTANCES +
-        GSP_TEMPLATE_SETTINGS_DETAIL_ROW_MAX_INSTANCES +
-        GSP_TEMPLATE_SETTINGS_UPDATE_NOTE_ROW_MAX_INSTANCES,
+        GSP_TEMPLATE_SETTINGS_WLAN_CONNECTED_ROW_MAX_INSTANCES +
+        GSP_TEMPLATE_SETTINGS_DETAIL_ROW_MAX_INSTANCES,
     .dynamic_image_slots =
         GSP_TEMPLATE_SETTINGS_ROOT_ROW_MAX_INSTANCES +
         GSP_SETTINGS_DYNAMIC_IMAGE_SLOTS,

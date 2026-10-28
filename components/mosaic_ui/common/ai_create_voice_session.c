@@ -71,6 +71,12 @@ static ai_create_voice_status_t status_from_error(esp_err_t error)
     case ESP_ERR_INVALID_SIZE:
         status.readiness = AI_CREATE_VOICE_READINESS_AUDIO_ERROR;
         break;
+    case CLAW_ENDPOINT_ERR_CREDENTIAL_EXCHANGE:
+        status.readiness = AI_CREATE_VOICE_READINESS_KEY_EXCHANGE_FAILED;
+        break;
+    case CLAW_ENDPOINT_ERR_CREDENTIAL_REJECTED:
+        status.readiness = AI_CREATE_VOICE_READINESS_VERIFY_FAILED;
+        break;
     case ESP_ERR_NOT_FOUND:
         /* No recognized text is an operation result, not degraded service. */
         status.readiness = AI_CREATE_VOICE_READINESS_READY;

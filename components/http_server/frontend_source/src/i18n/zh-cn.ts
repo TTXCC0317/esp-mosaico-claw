@@ -179,6 +179,7 @@ export const zhCn: Dict = {
   llmMaxTokensPlaceholder: '8192',
   llmAdvanced: 'LLM 高级选项',
   llmBackend: '后端类型',
+  llmEndpointProvider: '接入方式',
   llmBackendPlaceholder: 'openai_responses / openai_compatible / anthropic_compatible',
   llmBaseUrl: 'Base URL',
   llmBaseUrlPlaceholder: 'https://api.openai.com/v1',

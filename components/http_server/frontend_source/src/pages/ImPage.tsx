@@ -23,6 +23,7 @@ import { Banner } from '../components/ui/Banner';
 import { LabelLink } from '../components/ui/LabelLink';
 import { RestartConfirmModal } from '../components/system/RestartConfirmModal';
 import { IM_CREDENTIAL_URLS } from '../constants/externalLinks';
+import { WECHAT_DEFAULT_BASE_URL, WECHAT_DEFAULT_CDN_BASE_URL } from '../constants/wechat';
 import { pushToast } from '../state/toast';
 
 type ImForm = {
@@ -183,13 +184,13 @@ const WechatConfig: Component<WechatConfigProps> = (props) => {
             label={t('wechatBaseUrl')}
             placeholder={t('wechatBaseUrlPlaceholder') as string}
             value={props.form.wechat_base_url}
-            onInput={(e) => props.setForm('wechat_base_url', e.currentTarget.value)}
+            readOnly
           />
           <TextInput
             label={t('wechatCdnBaseUrl')}
             placeholder={t('wechatCdnBaseUrlPlaceholder') as string}
             value={props.form.wechat_cdn_base_url}
-            onInput={(e) => props.setForm('wechat_cdn_base_url', e.currentTarget.value)}
+            readOnly
           />
         </div>
       </Show>
@@ -371,6 +372,15 @@ export const ImPage: Component<{ onRestartRequest: () => void }> = (props) => {
   const [validationError, setValidationError] = createSignal<string | null>(null);
   const [confirmOpen, setConfirmOpen] = createSignal(false);
 
+  // Fill after loading so repaired URLs remain part of the save patch.
+  createEffect(() => {
+    if (tab.loading() || tab.error()) return;
+    batch(() => {
+      if (!tab.form.wechat_base_url.trim()) tab.setForm('wechat_base_url', WECHAT_DEFAULT_BASE_URL);
+      if (!tab.form.wechat_cdn_base_url.trim()) tab.setForm('wechat_cdn_base_url', WECHAT_DEFAULT_CDN_BASE_URL);
+    });
+  });
+
   createEffect(() => {
     void tab.form.wechat_token;
     void tab.form.wechat_base_url;
@@ -423,7 +433,8 @@ export const ImPage: Component<{ onRestartRequest: () => void }> = (props) => {
   const onWechatLoginComplete = (data: WechatLoginStatus) => {
     batch(() => {
       if (data.token) tab.setForm('wechat_token', data.token);
-      if (data.base_url) tab.setForm('wechat_base_url', data.base_url);
+      tab.setForm('wechat_base_url', data.base_url?.trim() || WECHAT_DEFAULT_BASE_URL);
+      if (!tab.form.wechat_cdn_base_url.trim()) tab.setForm('wechat_cdn_base_url', WECHAT_DEFAULT_CDN_BASE_URL);
       if (data.account_id) tab.setForm('wechat_account_id', data.account_id);
     });
     pushToast(t('imWechatCredsFilled') as string, 'info', 6000);
@@ -512,11 +523,11 @@ export const ImPage: Component<{ onRestartRequest: () => void }> = (props) => {
           open={isOpen('wechat')}
           onToggle={() => toggle('wechat')}
           onDelete={() =>
-            clearPlatform(
-              'wechat',
-              ['wechat_token', 'wechat_base_url', 'wechat_cdn_base_url', 'wechat_account_id'],
-              setField,
-            )
+            batch(() => {
+              clearPlatform('wechat', ['wechat_token', 'wechat_account_id'], setField);
+              tab.setForm('wechat_base_url', WECHAT_DEFAULT_BASE_URL);
+              tab.setForm('wechat_cdn_base_url', WECHAT_DEFAULT_CDN_BASE_URL);
+            })
           }
         >
           <WechatConfig

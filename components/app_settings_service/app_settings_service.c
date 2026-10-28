@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "app_config.h"
+#include "claw_endpoint.h"
 #include "app_system_config.h"
 #include "audio_hub.h"
 #include "display_service.h"
@@ -395,6 +396,13 @@ static void app_settings_fill_llm(app_settings_snapshot_t *snapshot,
     strlcpy(snapshot->llm.base_url, config->llm_base_url,
             sizeof(snapshot->llm.base_url));
     snapshot->llm.api_key_configured = config->llm_api_key[0] != '\0';
+    snapshot->llm.endpoint_configured = claw_endpoint_is_configured(
+        config->llm_endpoint_provider, &(claw_endpoint_config_t) {
+            .service = CLAW_ENDPOINT_SERVICE_LLM,
+            .base_url = config->llm_base_url,
+            .api_key = config->llm_api_key,
+            .auth_type = config->llm_auth_type,
+        });
     snapshot->llm.supports_tools =
         app_settings_parse_bool(config->llm_supports_tools);
     snapshot->llm.supports_vision =

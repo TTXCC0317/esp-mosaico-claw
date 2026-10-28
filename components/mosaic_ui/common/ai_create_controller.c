@@ -1444,6 +1444,10 @@ esp_err_t ai_create_controller_voice_start(ai_create_controller_handle_t control
          ((voice_status.readiness == AI_CREATE_VOICE_READINESS_OFFLINE ||
            voice_status.readiness ==
                AI_CREATE_VOICE_READINESS_PROVIDER_ERROR ||
+           voice_status.readiness ==
+               AI_CREATE_VOICE_READINESS_KEY_EXCHANGE_FAILED ||
+           voice_status.readiness ==
+               AI_CREATE_VOICE_READINESS_VERIFY_FAILED ||
            voice_status.readiness == AI_CREATE_VOICE_READINESS_AUDIO_ERROR) &&
           voice_status.retryable));
     if (!service_ready) {

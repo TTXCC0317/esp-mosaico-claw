@@ -9,4 +9,18 @@ config TRIAL_DEVICE_HMAC_KEY_ID
         Board-specific configuration should override this value to match
         the production provisioning layout.
 
+config TRIAL_SERVER_URL_CN
+    string "Trial server URL for mainland China"
+    default "https://mosaico-asr.espressif.com.cn"
+    help
+        HTTPS origin serving Trial authentication, chat and realtime ASR for
+        devices located in mainland China.
+
+config TRIAL_SERVER_URL_INTL
+    string "Trial server URL outside mainland China"
+    default "https://as.esp-claw.com"
+    help
+        HTTPS origin serving Trial authentication, chat and realtime ASR for
+        devices located outside mainland China.
+
 endmenu

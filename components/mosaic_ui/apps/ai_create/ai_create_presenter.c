@@ -268,6 +268,10 @@ static const char *voice_unavailable_copy(ai_create_voice_readiness_t readiness)
         return TR("Network offline; hold to retry", "网络离线；按住重试");
     case AI_CREATE_VOICE_READINESS_AUTH_FAILED:
         return TR("Invalid ASR credentials", "语音识别凭据无效");
+    case AI_CREATE_VOICE_READINESS_KEY_EXCHANGE_FAILED:
+        return TR("Key exchange failed; hold to retry", "密钥交换失败；按住重试");
+    case AI_CREATE_VOICE_READINESS_VERIFY_FAILED:
+        return TR("Verification failed; hold to retry", "校验失败；按住重试");
     case AI_CREATE_VOICE_READINESS_AUDIO_ERROR:
         return TR("Microphone unavailable", "麦克风不可用");
     case AI_CREATE_VOICE_READINESS_BUSY:
@@ -295,6 +299,12 @@ static const char *voice_notice_copy(ai_create_voice_readiness_t readiness)
     case AI_CREATE_VOICE_READINESS_AUTH_FAILED:
         return TR("Invalid ASR credentials. Check the speech recognition settings.",
                   "语音识别凭据无效，请检查语音识别设置。");
+    case AI_CREATE_VOICE_READINESS_KEY_EXCHANGE_FAILED:
+        return TR("Key exchange failed: the server refused to issue a voice service key. Try again later.",
+                  "密钥交换失败：服务器拒绝签发语音服务密钥，请稍后重试。");
+    case AI_CREATE_VOICE_READINESS_VERIFY_FAILED:
+        return TR("Verification failed: the voice service rejected the new key. Try again later.",
+                  "校验失败：语音服务拒绝了新密钥，请稍后重试。");
     case AI_CREATE_VOICE_READINESS_AUDIO_ERROR:
         return TR("The microphone is unavailable. Check the audio device.",
                   "麦克风不可用，请检查音频设备。");

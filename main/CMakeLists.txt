@@ -21,6 +21,5 @@ idf_component_register(
         mosaico_boot_splash
         nvs_flash
         weather_service
-        update_check_service
         gmf_core
 )

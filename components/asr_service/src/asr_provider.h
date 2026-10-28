@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "claw_endpoint.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -29,12 +30,13 @@ typedef enum {
 typedef void (*asr_provider_result_cb_t)(asr_provider_handle_t handle, asr_provider_result_type_t type, const char *text, void *user_ctx);
 
 typedef struct {
-    const char *api_key;
+    /* Borrowed; must outlive the provider instance. */
+    claw_endpoint_handle_t endpoint;
+    bool (*is_cancelled)(void *ctx);
+    void *cancel_ctx;
     const char *workspace_id;
-    const char *endpoint;
     const char *model;
     const char *language_hint;
-    bool trial_auth;
     uint32_t connect_timeout_ms;
     uint32_t send_timeout_ms;
     asr_provider_result_cb_t result_cb;
@@ -54,7 +56,6 @@ typedef struct {
 } asr_provider_ops_t;
 
 const asr_provider_ops_t *asr_provider_qwen_ops(void);
-const asr_provider_ops_t *asr_provider_trial_ops(void);
 
 #ifdef __cplusplus
 }

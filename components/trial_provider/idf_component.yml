@@ -1,0 +1,13 @@
+## trial_provider — region-aware Trial endpoint provider.
+dependencies:
+  claw_http:
+    path: ../../third-party/esp-claw/components/claw_modules/claw_http
+  claw_endpoint:
+    path: ../../third-party/esp-claw/components/claw_modules/claw_endpoint
+  claw_utils:
+    path: ../../third-party/esp-claw/components/claw_modules/claw_utils
+  region_service:
+    path: ../region_service
+  espressif/cjson: ^1.7.19
+description: Trial endpoint provider with GeoIP based server selection
+version: 0.2.0

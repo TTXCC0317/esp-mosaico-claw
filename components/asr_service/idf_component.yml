@@ -2,8 +2,8 @@
 dependencies:
   audio_hub:
     path: ../../third-party/esp-claw/components/common/audio_hub
-  trial_provider:
-    path: ../trial_provider
+  claw_endpoint:
+    path: ../../third-party/esp-claw/components/claw_modules/claw_endpoint
   espressif/cjson: ^1.7.19
   espressif/esp_websocket_client: ^1.6.1
 description: Realtime ASR service built on audio_hub capture

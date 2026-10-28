@@ -12,6 +12,7 @@ export type AppConfig = {
   ap_behavior: string;
   llm_api_key: string;
   llm_backend_type: string;
+  llm_endpoint_provider: string;
   llm_model: string;
   llm_base_url: string;
   llm_auth_type: string;
@@ -24,6 +25,7 @@ export type AppConfig = {
   llm_supports_vision: string;
   llm_image_remote_url_only: string;
   asr_provider: string;
+  asr_endpoint_provider: string;
   asr_api_key: string;
   asr_workspace_id: string;
   asr_language_hint: string;
@@ -67,6 +69,7 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
   llm: [
     'llm_api_key',
     'llm_backend_type',
+    'llm_endpoint_provider',
     'llm_model',
     'llm_base_url',
     'llm_auth_type',
@@ -81,6 +84,7 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
   ],
   asr: [
     'asr_provider',
+    'asr_endpoint_provider',
     'asr_api_key',
     'asr_workspace_id',
     'asr_language_hint',
